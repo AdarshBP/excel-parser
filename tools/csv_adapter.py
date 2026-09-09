@@ -109,8 +109,15 @@ def is_csv(path: Path) -> bool:
 
 
 def open_source(path: Path):
-    """Open a source file — returns CsvWorkbook for .csv, openpyxl for .xlsx."""
+    """Open a source file — returns CsvWorkbook for .csv, openpyxl for .xlsx.
+
+    Small files (< 20 MB) are loaded in normal mode so that cell-by-cell
+    access is O(1).  ``read_only=True`` streams the XML on each cell
+    lookup, which is O(n) per access and makes large-column validation
+    quadratic.  Only files above the threshold use read_only mode.
+    """
     if is_csv(path):
         return CsvWorkbook(path)
     import openpyxl
-    return openpyxl.load_workbook(path, read_only=True, data_only=True)
+    read_only = path.stat().st_size > 20 * 1024 * 1024   # 20 MB
+    return openpyxl.load_workbook(path, read_only=read_only, data_only=True)

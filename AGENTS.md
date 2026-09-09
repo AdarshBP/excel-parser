@@ -158,3 +158,59 @@ Examples 07 and 08 must fail validation and exit 1 with nothing written.
 * Client-facing errors must not carry stack traces or internal paths.
 * Global exception handlers catch DB errors (503) and unhandled errors (500)
   with safe messages; details are logged server-side only.
+
+## Client file examples (12–15)
+
+Real-world client workbooks live in `clientFiles/`. Configs for them follow the
+same pattern as examples 01–11 but cover wider layouts:
+
+| Example | Source type | Tables | Key layout challenge |
+|---|---|---|---|
+| `12_petpooja_growth` | xlsx, 1 sheet | 1 table, 84 cols (A–CF) | Skip summary rows 7–10 (`data_start_row=11`); wide daily report |
+| `13_smartq_payment` | xlsx, 1 sheet | 3 tables on one sheet | Gaps between blocks — fence each with `data_start_row`/`data_end_row`; `'-'` values → NULL via money cast |
+| `14_zomato_business` | **CSV** | 1 pivoted table, 36 cols | 10 restaurants × 47 metrics; 30 date columns (G–AJ); CSV sheet name = file stem |
+| `15_magicpin_ledger` | xlsx, 5 sheets | 10 active + 1 inactive | 7 sections on "Payout Breakup" sheet (each its own table); 976-row Order Level; empty "Additional Deductions" set `active=N` |
+
+Expected row counts: 12 = 31, 13 = 33 (5+8+20), 14 = 470, 15 = 1141
+(976+7+7+14+3+3+4+2+64+61).
+
+## How to create a config for a new client file
+
+1. **Inspect the source** — open with openpyxl (`data_only=True`), print every
+   row with non-null cells. Note sheet names, header rows, where data starts,
+   summary/total rows to skip, empty gaps between blocks, and the last data row.
+2. **Map blocks** — each contiguous data block with its own header becomes one
+   row in `sheet_config` (a separate `table_name`). Multiple blocks on one
+   sheet are fine — fence them with `header_row`, `data_start_row`,
+   `data_end_row`. Use `layout=key_value` for label/value pairs (no header
+   row), `layout=table` for header + data rows.
+3. **Map columns** — for each block, list every column letter → `column_name`,
+   pick `data_type` from the messiest value (not the first one), set
+   `nullable=N` only for columns that truly must never be empty, mark natural
+   keys with `is_key=Y`.
+4. **Generate the xlsx** — use openpyxl to write `readme`, `target_config`,
+   `sheet_config`, `column_config` sheets. Follow the Swiggy/SmartQ examples
+   for the exact header row.
+5. **Re-save the source if needed** — some xlsx files lack dimension metadata
+   (`max_row=None` in read-only mode). Open + save with openpyxl to fix, or
+   rely on the < 20 MB fast path in `csv_adapter.open_source()`.
+6. **Validate** — `python3 tools/validator.py config.xlsx source.xlsx --ddl schema.postgres.sql`.
+   Must exit 0 with 0 errors.
+7. **Test** — run executor with `--target sqlite --database test.db --trace 2`,
+   verify row counts, spot-check values, then delete the test artifacts.
+
+## Performance: openpyxl read_only mode
+
+`csv_adapter.open_source()` opens xlsx files. Before 2026-09, it always used
+`read_only=True`, which streams XML and makes `ws.cell(row, col)` O(n) per
+call — fine for small sheets but O(n²) overall for the validator/executor's
+cell-by-cell loop on wide tables (e.g. 976 rows × 64 cols hangs for hours).
+
+**Fix**: files < 20 MB now open in normal mode (`read_only=False`), which loads
+everything into memory and gives O(1) cell access. Files > 20 MB still use
+`read_only=True` to avoid memory pressure. The 20 MB threshold is well above
+any real workbook and well below Drive's 40 MB cap.
+
+Drive files are unaffected: they are always downloaded to a local `.xlsx`
+first (`sources.resolve()` → `drive.download()` → `cache/`), so
+`open_source()` sees a local file and the size check works normally.
