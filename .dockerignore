@@ -1,0 +1,14 @@
+.env
+.git
+*.db
+app/state.db
+app/data
+app/cache
+app/uploads
+app/snapshots
+app/frontend/node_modules
+app/frontend/dist
+app/frontend/.angular
+__pycache__
+*.pyc
+.DS_Store

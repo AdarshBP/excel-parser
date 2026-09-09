@@ -1,0 +1,33 @@
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Local assistant/dev tool config
+.devin/
+.agents/
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Node / Angular
+node_modules/
+dist/
+.angular/
+
+# Test / coverage
+.pytest_cache/
+.mypy_cache/
+.coverage
+
+# Editors
+.idea/
+.vscode/
+*.swp

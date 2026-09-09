@@ -1,0 +1,502 @@
+<div class="page">
+  @if (!project() && !error()) {
+    <!-- Loading skeleton -->
+    <div class="skeleton-bar">
+      <p-skeleton width="6rem" height="1.5rem" />
+      <p-skeleton width="12rem" height="2rem" />
+      <span class="grow"></span>
+      <p-skeleton width="5rem" height="2rem" />
+      <p-skeleton width="5rem" height="2rem" />
+    </div>
+    <p-skeleton width="100%" height="5rem" />
+    <p-skeleton width="100%" height="10rem" />
+  }
+  @if (error()) {
+    <p-message severity="error" [text]="error()!" />
+  }
+
+  @if (stale()) {
+    <p-message severity="warn">
+      {{ status()?.source_changed ? 'The source workbook' : '' }}
+      {{ status()?.source_changed && status()?.config_changed ? ' and ' : '' }}
+      {{ status()?.config_changed ? 'The configuration workbook' : '' }}
+      changed since the last render: click Render to see it.
+    </p-message>
+  }
+
+  <!-- ─── Toolbar ─────────────────────────────────────────────────── -->
+  <div class="toolbar">
+    <nav class="breadcrumb">
+      <a routerLink="/work" class="crumb">My work</a>
+      <i class="pi pi-chevron-right crumb-sep"></i>
+      <span class="crumb-current">{{ edit.name || 'Untitled' }}</span>
+    </nav>
+    <input pInputText [(ngModel)]="edit.name" placeholder="Project name" class="name-input" />
+    <span class="grow"></span>
+    <span class="toolbar-status">
+      @if (busy()) {
+        <i class="pi pi-spin pi-spinner"></i>
+        <span class="muted">Fetching and rendering...</span>
+      } @else if (render()) {
+        <span class="muted">{{ render()!.tables.length }} table(s) · {{ totalRows() }} rows</span>
+      }
+
+      @if (pollError()) {
+        <span class="poll-indicator poll-error" pTooltip="Sync failed: check your connection or Drive access">
+          <span class="poll-dot poll-dot-err"></span>
+          <span class="poll-label poll-label-err">Sync failed</span>
+        </span>
+      } @else if (stale() && !busy()) {
+        <span class="poll-indicator poll-stale" pTooltip="Source workbook changed: click Render to update">
+          <span class="poll-dot poll-dot-stale"></span>
+          <span class="poll-label poll-label-stale">Changed: re-render</span>
+        </span>
+      } @else if (status() && !busy()) {
+        <span class="poll-indicator" [pTooltip]="'Polling every ' + settings.pollInterval() + 's for workbook changes'">
+          <span class="poll-dot poll-dot-ok"></span>
+          <span class="poll-label">Synced {{ status()!.checked_at | date: 'mediumTime' }}</span>
+        </span>
+      }
+    </span>
+    <div class="btn-group">
+      <p-button label="Save" size="small" [outlined]="true"
+                pTooltip="Save project settings" tooltipPosition="bottom"
+                (onClick)="save()" />
+      <p-button label="DDL" size="small" [outlined]="true"
+                pTooltip="View generated CREATE TABLE statements" tooltipPosition="bottom"
+                (onClick)="showDdl()" />
+    </div>
+    <p-button label="Render" size="small" [loading]="busy()"
+              pTooltip="Save and render the schema from current workbooks" tooltipPosition="bottom"
+              (onClick)="doRender()" />
+    <p-button label="Push" size="small" severity="success"
+              [disabled]="!canPush()"
+              pTooltip="Push schema and data to the database" tooltipPosition="bottom"
+              (onClick)="openPush()" />
+    <p-button icon="pi pi-question-circle" size="small" [text]="true"
+              pTooltip="Keyboard shortcuts ({{ isMac ? '⌘' : 'Ctrl' }}+/)" tooltipPosition="bottom"
+              (onClick)="helpDialog = true" />
+  </div>
+
+  <!-- ─── Configuration (collapsible) ────────────────────────────── -->
+  <p-panel header="Configuration" [toggleable]="true" [(collapsed)]="configOpen"
+           [toggler]="'header'">
+    <div class="config-cards">
+      <div class="config-row">
+        <label class="config-label">Configuration</label>
+        <app-workbook-ref [(value)]="edit.config_ref" [files]="files()" role="config" />
+      </div>
+
+      <div class="config-row">
+        <label class="config-label">Source</label>
+        <app-workbook-ref [(value)]="edit.source_ref" [files]="files()" />
+      </div>
+
+      @if (isCsvSource() && !edit.config_ref) {
+        <div class="auto-config-hint">
+          <i class="pi pi-info-circle"></i>
+          <span>CSV source detected.</span>
+          <p-button label="Auto-generate config" size="small" [outlined]="true"
+                    icon="pi pi-bolt" [loading]="generatingConfig()"
+                    pTooltip="Generate a configuration workbook from the CSV headers"
+                    (onClick)="autoGenerateConfig()" />
+        </div>
+      }
+
+      <div class="config-footer">
+        <div class="config-option">
+          <span class="config-label">Keys</span>
+          <p-select appendTo="body" [options]="idTypes" optionLabel="label" optionValue="value"
+                    [(ngModel)]="idType" (ngModelChange)="changeIdType()" />
+        </div>
+        <div class="config-option">
+          <span class="config-label">Auto-render</span>
+          <p-toggleswitch [(ngModel)]="autoRender" (ngModelChange)="save()" />
+        </div>
+        <span class="status">
+          @if (render()?.rendered_at) {
+            Rendered {{ render()!.rendered_at | date: 'short' }}
+          } @else {
+            Not rendered yet
+          }
+          @if (status()) {
+            · polled {{ status()!.checked_at | date: 'mediumTime' }}
+            @if (stale()) {
+              · <span class="status-stale">changed</span>
+            }
+          }
+        </span>
+      </div>
+    </div>
+  </p-panel>
+
+  <!-- ─── Schema & Preview ───────────────────────────────────────── -->
+  @if (render()) {
+    <div class="section-bar">
+      <div class="btn-group">
+        <p-button label="ER diagram" size="small"
+                  pTooltip="Interactive schema diagram with relationships" tooltipPosition="bottom"
+                  [outlined]="view() !== 'er'" (onClick)="view.set('er')" />
+        <p-button label="Blocks" size="small"
+                  pTooltip="List of configured blocks with preview" tooltipPosition="bottom"
+                  [outlined]="view() !== 'blocks'" (onClick)="view.set('blocks')" />
+      </div>
+      <span class="section-meta clickable" (click)="scrollToValidation()">
+        @if (errors().length) {
+          <span class="err-count">{{ errors().length }} error(s)</span>
+        } @else {
+          <span class="ok-count">0 errors</span>
+        }
+        <span class="muted">,</span>
+        @if (warnings().length) {
+          <span class="warn-count">{{ warnings().length }} warning(s)</span>
+        } @else {
+          <span class="muted">0 warnings</span>
+        }
+      </span>
+      @if (badCells().length || skippedRows().length) {
+        <span class="section-meta clickable" (click)="scrollToDataQuality()">
+          <span class="muted">·</span>
+          @if (badCells().length) {
+            <span class="warn-count">{{ badCells().length }} type issue(s)</span>
+          }
+          @if (skippedRows().length) {
+            <span class="warn-count">{{ skippedRows().length }} skipped</span>
+          }
+        </span>
+      }
+    </div>
+
+    @if (view() === 'er') {
+      <p-card>
+        <ng-template #title>Schema</ng-template>
+        <app-er-diagram [tables]="render()!.tables" [control]="render()!.control_tables"
+                        [selected]="selected()" (pick)="show($event)" />
+      </p-card>
+    }
+
+    <div class="split" [class.wide]="view() === 'er'">
+      @if (view() === 'blocks') {
+      <p-card>
+        <ng-template #title>Blocks</ng-template>
+        <div class="blocks">
+          @for (t of render()!.tables; track t.table_name) {
+            <button class="block" [class.on]="selected() === t.table_name"
+                    (click)="selected.set(t.table_name)">
+              <strong>{{ t.physical_name }}</strong>
+              <small>{{ t.sheet_name }}!{{ t.data_start_row }}–{{ t.data_end_row ?? 'end' }}
+                     · {{ rowsOf(t.table_name) }} rows</small>
+            </button>
+          }
+        </div>
+      </p-card>
+      }
+
+      <div class="detail-stack">
+        @if (table()) {
+          <div class="diagram">
+            <h4>{{ table()!.physical_name }}
+              <span class="muted">
+                @if (table()!.control) {
+                  : control table
+                } @else {
+                  : {{ table()!.sheet_name }}, {{ table()!.layout }}
+                }
+              </span></h4>
+            <div class="scrollx">
+            <table class="cols">
+              @for (c of table()!.columns; track c.name) {
+                <tr [class.lineage]="c.lineage">
+                  <td>
+                    {{ c.name }}
+                    @if (c.is_key) { <p-tag value="key" severity="info" /> }
+                    @if (!c.nullable && !c.lineage) { <p-tag value="required" severity="warn" /> }
+                  </td>
+                  <td class="type">{{ c.type }}</td>
+                  <td class="muted">
+                    {{ c.lineage ? 'lineage' : c.source }}
+                    {{ c.source_header ? '· ' + c.source_header : '' }}
+                  </td>
+                </tr>
+              }
+            </table>
+            </div>
+          </div>
+
+          @if (table()!.notes) { <p class="muted">{{ table()!.notes }}</p> }
+
+          @if (preview()) {
+            <p-card>
+              <ng-template #title>
+                <div class="preview-title-row">
+                  <span>Preview: first {{ preview()!.rows.length }} of
+                    {{ preview()!.loadable_rows }} row(s)</span>
+                  @if (settings.exportCsv()) {
+                    <p-button icon="pi pi-download" size="small" [text]="true"
+                              pTooltip="Export as CSV" tooltipPosition="bottom"
+                              (onClick)="exportCsv()" />
+                  }
+                </div>
+              </ng-template>
+              @if (preview()!.missing_sheet) {
+                <p-message severity="error"
+                           [text]="'worksheet ' + preview()!.sheet_name + ' is not in the source'" />
+              } @else {
+                <div class="scrollx">
+                <p-table [value]="preview()!.rows" size="small" [scrollable]="true"
+                         scrollHeight="26rem">
+                  <ng-template #header>
+                    <tr>
+                      <th>row</th>
+                      @for (c of preview()!.columns; track c) { <th>{{ c }}</th> }
+                    </tr>
+                  </ng-template>
+                  <ng-template #body let-r>
+                    <tr>
+                      <td class="muted">{{ r.source_row_num }}</td>
+                      @for (cell of r.cells; track cell.column) {
+                        <td>
+                          <span class="cellval"
+                                [pTooltip]="cell.cell + ' → ' + (cell.value ?? 'NULL')
+                                            + (cell.raw !== cell.value
+                                               ? '  (raw ' + (cell.raw ?? 'empty') + ')' : '')">
+                            {{ cell.value ?? '—' }}
+                          </span>
+                        </td>
+                      }
+                    </tr>
+                  </ng-template>
+                </p-table>
+                </div>
+                @if (preview()!.skipped.length) {
+                  <p class="muted">{{ preview()!.skipped.length }} row(s) skipped:
+                    a required column was empty.</p>
+                }
+              }
+            </p-card>
+          }
+        }
+
+        <!-- ─── Data Quality ─────────────────────────────────────── -->
+        @if (badCells().length || skippedRows().length) {
+          <p-card id="data-quality">
+            <ng-template #title>
+              Data quality: push blocked
+              @if (badCells().length) {
+                : <span class="err-count">{{ badCells().length }} type mismatch(es)</span>
+              }
+              @if (skippedRows().length) {
+                : <span class="err-count">{{ skippedRows().length }} skipped row(s)</span>
+              }
+            </ng-template>
+            <p-message severity="error"
+              text="Fix these issues before pushing. Type mismatches would store NULL, skipped rows would lose data." />
+
+            @if (badCells().length) {
+              <p class="dq-label">Type mismatches: these cells don't match their configured
+                <code>data_type</code> and will be stored as NULL:</p>
+              @for (b of badCells(); track $index) {
+                <div class="dq-item dq-warn">
+                  <span class="dq-cell">{{ b.cell }}</span>
+                  <span class="dq-col">{{ b.table }}.{{ b.column }}</span>
+                  <span>{{ b.message }}</span>
+                </div>
+              }
+            }
+
+            @if (skippedRows().length) {
+              <p class="dq-label">Skipped rows: a required (<code>nullable = N</code>) column
+                was empty:</p>
+              @for (s of skippedRows(); track $index) {
+                <div class="dq-item dq-skip">
+                  <span class="dq-cell">row {{ s.row }}</span>
+                  <span class="dq-col">{{ s.table }}</span>
+                  <span>missing: {{ s.columns.join(', ') }}</span>
+                </div>
+              }
+            }
+          </p-card>
+        }
+
+        <!-- ─── Validation ──────────────────────────────────────── -->
+        <p-card #validationCard id="validation">
+          <ng-template #title>
+            Validation: {{ errors().length }} error(s), {{ warnings().length }} warning(s)
+          </ng-template>
+          @if (!render()!.issues.length && !badCells().length && !skippedRows().length) {
+            <p-message severity="success" text="Everything checks out." />
+          } @else if (!render()!.issues.length) {
+            <p-message severity="success" text="Configuration is valid." />
+          }
+          @for (i of render()!.issues; track $index) {
+            <div class="issue">
+              <p-tag [value]="i.severity"
+                     [severity]="i.severity === 'error' ? 'danger' : 'warn'" />
+              <span class="muted">{{ i.where }}</span>
+              <span>{{ i.message }}</span>
+            </div>
+          }
+        </p-card>
+      </div>
+    </div>
+  } @else {
+    <p-card><p class="muted">Nothing rendered yet: click Render.</p></p-card>
+  }
+</div>
+
+<p-dialog header="Push to database" [(visible)]="pushDialog" [modal]="true"
+          [style]="{ width: '36rem', maxWidth: '94vw' }">
+  <div class="push-content">
+    @if (render()?.target; as t) {
+      <!-- Summary stats -->
+      <div class="push-stats">
+        <div class="push-stat">
+          <span class="push-stat-value">{{ render()!.tables.length }}</span>
+          <span class="push-stat-label">tables</span>
+        </div>
+        <div class="push-stat">
+          <span class="push-stat-value">{{ totalRows() }}</span>
+          <span class="push-stat-label">rows</span>
+        </div>
+        <div class="push-stat" [class.push-stat-err]="errors().length">
+          <span class="push-stat-value">{{ errors().length }}</span>
+          <span class="push-stat-label">errors</span>
+        </div>
+        <div class="push-stat" [class.push-stat-err]="badCells().length + skippedRows().length">
+          <span class="push-stat-value">{{ badCells().length + skippedRows().length }}</span>
+          <span class="push-stat-label">data issues</span>
+        </div>
+      </div>
+
+      <!-- Detailed breakdown -->
+      <div class="push-details">
+        <div class="push-detail-row">
+          <span class="push-detail-label">target</span>
+          <span><strong>{{ t.target }}</strong></span>
+        </div>
+        <div class="push-detail-row">
+          <span class="push-detail-label">host</span>
+          <span>{{ t.host || '—' }}</span>
+        </div>
+        <div class="push-detail-row">
+          <span class="push-detail-label">database</span>
+          <span>{{ t.database || '—' }}</span>
+        </div>
+        <div class="push-detail-row">
+          <span class="push-detail-label">schema</span>
+          <span>{{ t.db_schema || '(default)' }}</span>
+        </div>
+        @if (t.prefix) {
+          <div class="push-detail-row">
+            <span class="push-detail-label">table prefix</span>
+            <span>{{ t.prefix }}</span>
+          </div>
+        }
+        <div class="push-detail-row">
+          <span class="push-detail-label">keys</span>
+          <span>{{ t.id_type === 'uuid' ? 'UUID' : 'number' }}</span>
+        </div>
+        <div class="push-detail-row">
+          <span class="push-detail-label">credentials</span>
+          <span>{{ t.credentials }}</span>
+        </div>
+        <div class="push-detail-row">
+          <span class="push-detail-label">rows to insert</span>
+          <span><strong>{{ totalRows() }}</strong></span>
+        </div>
+      </div>
+
+      <!-- Data quality warnings -->
+      @if (badCells().length || skippedRows().length) {
+        <p-message severity="error"
+          [text]="'Push blocked: ' + badCells().length + ' type mismatch(es), '
+                  + skippedRows().length + ' skipped row(s)'" />
+      }
+    }
+
+    <!-- Errors -->
+    @if (error() && !pushResult() && !schemaResult()) {
+      <p-message severity="error" [text]="error()!" />
+    }
+    @if (pushIssues().length) {
+      @for (i of pushIssues(); track $index) {
+        <div class="issue">
+          <p-tag value="error" severity="danger" />
+          <span class="muted">{{ i.where }}</span><span>{{ i.message }}</span>
+        </div>
+      }
+    }
+
+    <!-- Results -->
+    @if (schemaResult()) {
+      <p-message [severity]="schemaResult()!.includes('already') ? 'info' : 'success'"
+                 [text]="schemaResult()!" />
+    }
+    @if (pushResult(); as done) {
+      <p-message severity="success"
+                 [text]="done.row_total + ' row(s) inserted as file_id ' + done.file_id" />
+      <div class="push-result-tables">
+        @for (r of pushedRows(); track r.table) {
+          <div class="push-result-row">
+            <span>{{ r.table }}</span>
+            <span class="push-result-count">{{ r.rows }}</span>
+          </div>
+        }
+      </div>
+    }
+  </div>
+
+  <ng-template #footer>
+    @if (pushResult() || schemaResult()) {
+      <p-button label="History" [text]="true" size="small" icon="pi pi-clock"
+                routerLink="/work" />
+      <p-button label="Done" size="small" (onClick)="pushDialog = false" />
+    } @else {
+      <p-button label="Schema only" [outlined]="true" size="small"
+                icon="pi pi-table" [loading]="pushingSchema()"
+                pTooltip="Create tables without inserting any data" tooltipPosition="top"
+                (onClick)="confirmPushSchema()" />
+      <p-button label="Schema + Data" severity="success" size="small"
+                icon="pi pi-database" [loading]="pushing()"
+                [disabled]="!canPush()"
+                pTooltip="Create tables and insert all rows" tooltipPosition="top"
+                (onClick)="confirmPush()" />
+    }
+  </ng-template>
+</p-dialog>
+
+<p-dialog header="Generated DDL" [(visible)]="ddlDialog" [modal]="true"
+          [style]="{ width: '52rem' }">
+  <pre>{{ ddlText() }}</pre>
+</p-dialog>
+
+<!-- Help -->
+<p-dialog header="Keyboard shortcuts" [(visible)]="helpDialog" [modal]="true"
+          [style]="{ width: '28rem' }" [dismissableMask]="true">
+  <div class="help-shortcuts">
+    <div class="shortcut-row">
+      <kbd>{{ isMac ? '⌘' : 'Ctrl' }} + S</kbd>
+      <span>Save project settings</span>
+    </div>
+    <div class="shortcut-row">
+      <kbd>{{ isMac ? '⌘' : 'Ctrl' }} + R</kbd>
+      <span>Render (save and re-process workbooks)</span>
+    </div>
+    <div class="shortcut-row">
+      <kbd>{{ isMac ? '⌘' : 'Ctrl' }} + Enter</kbd>
+      <span>Open push dialog (when push is available)</span>
+    </div>
+    <div class="shortcut-row">
+      <kbd>{{ isMac ? '⌘' : 'Ctrl' }} + D</kbd>
+      <span>View generated DDL statements</span>
+    </div>
+    <div class="shortcut-row">
+      <kbd>{{ isMac ? '⌘' : 'Ctrl' }} + /</kbd>
+      <span>Toggle this help dialog</span>
+    </div>
+    <div class="shortcut-row">
+      <kbd>Esc</kbd>
+      <span>Close any open dialog</span>
+    </div>
+  </div>
+</p-dialog>

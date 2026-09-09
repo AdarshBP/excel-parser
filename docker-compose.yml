@@ -1,0 +1,49 @@
+# Dev stack: app + PostgreSQL.
+#
+#   docker compose up              # starts both
+#   docker compose up -d db        # just PG (for local dev with ./run.sh)
+#
+# The app reads .env for PG credentials. Override with environment: in services.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cos_user
+      POSTGRES_PASSWORD: cos_password
+      POSTGRES_DB: excel_parser
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cos_user -d excel_parser"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+      PGUSER: cos_user
+      PGPASSWORD: cos_password
+      PGDATABASE: excel_parser
+      APP_SCHEMA: excelparser_config
+      APP_ENV: production
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      # Mount examples and exports so WORKBOOK_DIR works
+      - ./examples:/app/examples:ro
+      - ./exports:/app/exports:ro
+
+volumes:
+  pgdata:
