@@ -2,6 +2,7 @@
 .env
 .env.local
 .env.docker
+.env.prod
 .env.*.local
 # .env.example and .env.prod ARE tracked (they have placeholders, not real secrets)
 
