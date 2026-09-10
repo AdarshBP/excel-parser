@@ -113,7 +113,6 @@ Rules that matter:
 | `data_type` | yes | one of `text`, `numeric`, `integer`, `date`, `timestamp`, `boolean` | anything else stops schema generation with an error. |
 | `nullable` | yes | `Y` / `N` | `N` = `NOT NULL` in the schema, and any source row with that cell empty is rejected and reported instead of failing the load. Keep it `Y` unless the cell is genuinely always filled. |
 | `is_key` | yes | `Y` / `N` | `Y` only creates a non-unique index (e.g. on `order_id`). It is **not** a primary key and does not deduplicate. |
-| `transform` | no | `trim`, `money`, `percent`, `date`, blank | documentation of intent; the actual cleaning is driven by `data_type` (see below). |
 | `column_order` | yes | integer | controls the column order in the generated table. Gaps are fine; duplicates make the order arbitrary. |
 | `references` | no | `table_name.column_name` | declares a foreign-key relationship to another table's column, drawn as a dashed line in the ER diagram. Does not create a database constraint - it is for documentation and the diagram only. |
 | `null_default` | no | the value to use when a cell is empty | blank or `null` = store NULL (the default). For `numeric`/`integer` columns, `0` stores zero instead of NULL. For `text`, any string (e.g. an empty string or `N/A`). For `boolean`, `0`/`1`/`true`/`false`. Applied after type casting, so a cell with `-` that casts to NULL will also get the default. |
@@ -123,28 +122,59 @@ Rules that matter:
 
 ### Available scripts
 
-| Script | Applies to | What it does |
+**Text scripts:**
+
+| Script | Example | Result |
 |---|---|---|
-| `uppercase` | text | Convert to UPPER CASE |
-| `lowercase` | text | Convert to lower case |
-| `titlecase` | text | Capitalize Each Word |
-| `trim` | text | Strip leading/trailing whitespace |
-| `strip_spaces` | text | Remove all whitespace |
-| `digits_only` | text | Keep only digits |
-| `letters_only` | text | Keep only letters |
-| `alphanum_only` | text | Keep only letters and digits |
-| `abs` | numeric/integer | Absolute value |
-| `round_2` | numeric | Round to 2 decimal places |
-| `round_0` | numeric | Round to 0 decimal places |
-| `floor` | numeric/integer | Round down |
-| `ceil` | numeric/integer | Round up |
-| `negate` | numeric/integer | Flip the sign |
-| `date_only` | timestamp | Strip time, keep YYYY-MM-DD |
-| `year_month` | date/timestamp | Extract YYYY-MM |
-| `not_null` | any | Error if the value is NULL |
+| `uppercase` | `'hello world'` | `'HELLO WORLD'` |
+| `lowercase` | `'Hello World'` | `'hello world'` |
+| `titlecase` | `'hello world'` | `'Hello World'` |
+| `trim` | `'  hello  '` | `'hello'` |
+| `strip_spaces` | `'hello world'` | `'helloworld'` |
+| `collapse_spaces` | `'hello    world'` | `'hello world'` |
+| `replace_newlines` | `'line1\nline2'` | `'line1 line2'` |
+| `digits_only` | `'INV-001-AB'` | `'001'` |
+| `letters_only` | `'Order-123'` | `'Order'` |
+| `alphanum_only` | `'Order #123!'` | `'Order123'` |
+| `remove_punctuation` | `'Hello, World!'` | `'Hello World'` |
+| `first_word` | `'John Smith'` | `'John'` |
+| `last_word` | `'John Smith'` | `'Smith'` |
+| `left_10` | `'ABCDEFGHIJKLMNOP'` | `'ABCDEFGHIJ'` |
+| `right_10` | `'ABCDEFGHIJKLMNOP'` | `'GHIJKLMNOP'` |
+| `slug` | `'Hello World!'` | `'hello-world'` |
+
+**Numeric scripts:**
+
+| Script | Example | Result |
+|---|---|---|
+| `abs` | `-120.5` | `120.5` |
+| `negate` | `100` | `-100` |
+| `round_2` | `3.14159` | `3.14` |
+| `round_1` | `3.456` | `3.5` |
+| `round_0` | `3.7` | `4.0` |
+| `floor` | `3.9` | `3` |
+| `ceil` | `3.1` | `4` |
+| `pct_to_fraction` | `18.0` | `0.18` |
+| `fraction_to_pct` | `0.18` | `18.0` |
+| `clamp_0` | `-5` | `0` |
+
+**Date scripts:**
+
+| Script | Example | Result |
+|---|---|---|
+| `date_only` | `'2026-08-02T19:45:00'` | `'2026-08-02'` |
+| `year_month` | `'2026-08-02'` | `'2026-08'` |
+| `year_only` | `'2026-08-02'` | `'2026'` |
+
+**Guard scripts:**
+
+| Script | What it does |
+|---|---|
+| `not_null` | Error if the value is NULL |
+| `not_empty` | Error if the value is NULL or an empty string |
 
 Chain with `|`: `trim|uppercase` runs trim first, then uppercase.
-Scripts skip NULL values automatically (except `not_null`).
+Scripts skip NULL values automatically (except `not_null` and `not_empty`).
 
 Rules that matter:
 
@@ -201,7 +231,7 @@ loaded twice under one `file_id`.
 Two control tables are always generated:
 
 * `source_file` - file name, SHA-256, `source_ref` (the original reference:
-  Drive file ID, Sheets link, or local path), row count, load timestamp.
+  Drive file ID, Sheets link, or upload reference), row count, load timestamp.
   The hash is unique, so re-loading a byte-identical file is refused.
   An AI agent can read `source_ref` to trace back to the original file.
 * `load_config_audit` - for each table: the sheet, the row range/column

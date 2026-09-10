@@ -1,8 +1,6 @@
 import { Component, inject, signal, computed } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ButtonModule } from '@openng/optimus-ui/button';
-import { CardModule } from '@openng/optimus-ui/card';
-import { DialogModule } from '@openng/optimus-ui/dialog';
 import { InputTextModule } from '@openng/optimus-ui/inputtext';
 import { MessageModule } from '@openng/optimus-ui/message';
 import { TagModule } from '@openng/optimus-ui/tag';
@@ -10,194 +8,158 @@ import { TooltipModule } from '@openng/optimus-ui/tooltip';
 import { Api } from '../core/api';
 import { GooglePicker } from '../core/picker';
 import {
-  BatchFileResult, BatchPushResult, BatchValidateResult, WorkbookDirItem,
+  BatchFileResult, BatchPushResult, BatchValidateResult,
 } from '../core/models';
+import { WorkbookRefField } from './workbook-ref';
 
 @Component({
   selector: 'app-batch',
   imports: [
-    FormsModule, ButtonModule, CardModule, DialogModule,
+    FormsModule, ButtonModule,
     InputTextModule, MessageModule, TagModule, TooltipModule,
+    WorkbookRefField,
   ],
   template: `
     <div class="page">
-      <h2>Batch run</h2>
-      <p class="subtitle">Validate and push multiple source files against one configuration.</p>
+      <div class="page-header">
+        <div class="page-header-left">
+          <h1 class="page-title">Batch run</h1>
+          <p class="page-subtitle">Validate and push multiple source files against one configuration.</p>
+        </div>
+      </div>
+
+      <!-- Step indicator -->
+      <div class="step-indicator">
+        <div class="step">
+          <span class="step-circle active">1</span>
+          <div>
+            <div class="step-label">Select configuration</div>
+            <div class="step-desc">Choose configuration and upload files</div>
+          </div>
+        </div>
+        <div class="step-line"></div>
+        <div class="step">
+          <span class="step-circle" [class.active]="!!validateResult()" [class.inactive]="!validateResult()">2</span>
+          <div>
+            <div class="step-label">Validate</div>
+            <div class="step-desc">Check for errors and fix</div>
+          </div>
+        </div>
+        <div class="step-line"></div>
+        <div class="step">
+          <span class="step-circle" [class.active]="!!pushResult()" [class.inactive]="!pushResult()">3</span>
+          <div>
+            <div class="step-label">Push</div>
+            <div class="step-desc">Push data to database</div>
+          </div>
+        </div>
+      </div>
 
       <!-- Config selector -->
-      <p-card class="setup">
-        <ng-template #title>
-          <div class="card-title-row">
-            <span>Configuration</span>
-            <p-button label="Download template" icon="pi pi-download" size="small"
-                      [outlined]="true" (onClick)="downloadTemplate()" />
+      <div class="section-card">
+        <div class="section-card-header">
+          <div>
+            <div class="section-title">Configuration</div>
+            <div class="section-desc" style="margin-bottom: 0;">Select the configuration to use for this batch run.</div>
           </div>
-        </ng-template>
-        <div class="add-section">
-          <div class="mode-tabs">
-            <button class="tab" [class.active]="configMode === 'local'" (click)="configMode = 'local'">
-              <i class="pi pi-file"></i> File
-            </button>
-            <button class="tab" [class.active]="configMode === 'link'" (click)="configMode = 'link'">
-              <i class="pi pi-link"></i> Link
-            </button>
-            <button class="tab" [class.active]="configMode === 'drive'" (click)="configMode = 'drive'; loadDriveStatus()">
-              <i class="pi pi-google"></i> Drive
-            </button>
-          </div>
-
-          @if (configMode === 'local') {
-            <div class="config-row">
-              <input pInputText [(ngModel)]="configRef" placeholder="Path to configuration workbook" />
-              <p-button icon="pi pi-folder-open" size="small" [outlined]="true"
-                        pTooltip="Browse" (onClick)="browseFor = 'config'; browser = true; loadDir('')" />
-            </div>
-          }
-
-          @if (configMode === 'link') {
-            <div class="config-row">
-              <input pInputText [(ngModel)]="configRef"
-                     placeholder="https://docs.google.com/spreadsheets/d/..." />
-            </div>
-            <small class="hint">Share as "Anyone with the link: Viewer"</small>
-          }
-
-          @if (configMode === 'drive') {
-            @if (!driveStatus()?.configured) {
-              <p-message severity="warn" text="Google Drive not configured: set GOOGLE_CLIENT_ID in .env" />
-            } @else if (!driveStatus()?.connected) {
-              <div class="config-row">
-                <p-button label="Connect Google Drive" icon="pi pi-google" size="small"
-                          [loading]="driveConnecting()" (onClick)="connectDrive()" />
-                <small class="hint">Read-only access</small>
-              </div>
-            } @else {
-              <div class="config-row">
-                <p-tag [value]="driveStatus()!.email ?? 'connected'" severity="success" />
-                <p-button label="Pick from Drive" icon="pi pi-external-link" size="small"
-                          [loading]="pickingDrive()" (onClick)="openDrivePicker('config')" />
-              </div>
-            }
-          }
-
-          @if (configRef) {
-            <div class="config-result">
-              <span class="file-name">{{ fileName(configRef) }}</span>
-              <span class="file-path">{{ configRef }}</span>
-              <p-button icon="pi pi-check-circle" size="small" [outlined]="true"
-                        [loading]="testingConfig()" pTooltip="Test"
-                        (onClick)="testConfig()" />
-              @if (configOk()) { <i class="pi pi-check-circle status-ok"></i> }
-              @if (configError()) { <i class="pi pi-times-circle status-err"
-                                       [pTooltip]="configError()!"></i> }
-            </div>
-          }
+          <p-button label="Download template" icon="pi pi-download" size="small"
+                    [outlined]="true" (onClick)="downloadTemplate()" />
         </div>
-      </p-card>
+        <app-workbook-ref [(value)]="configRef" role="config"
+                          handleKey="batch:config" />
+      </div>
 
       <!-- Source files -->
-      <p-card class="setup">
-        <ng-template #title>
-          Source files
-          @if (sourceRefs.length) {
-            <span class="file-count">{{ sourceRefs.length }} file(s)</span>
-          }
-        </ng-template>
-
-        <div class="add-section">
-          <div class="mode-tabs">
-            <button class="tab" [class.active]="addMode === 'local'" (click)="addMode = 'local'">
-              <i class="pi pi-file"></i> File
-            </button>
-            <button class="tab" [class.active]="addMode === 'link'" (click)="addMode = 'link'">
-              <i class="pi pi-link"></i> Link
-            </button>
-            <button class="tab" [class.active]="addMode === 'drive'" (click)="addMode = 'drive'; loadDriveStatus()">
-              <i class="pi pi-google"></i> Drive
-            </button>
+      <div class="section-card">
+        <div class="section-card-header">
+          <div>
+            <div class="section-title">Source files</div>
+            <div class="section-desc" style="margin-bottom: 0;">Upload multiple source files to validate and push.</div>
           </div>
-
-          @if (addMode === 'local') {
-            <div class="add-row">
-              <input pInputText [(ngModel)]="newRef" placeholder="Path to source workbook"
-                     (keyup.enter)="addFile()" />
-              <p-button icon="pi pi-folder-open" size="small" [outlined]="true"
-                        pTooltip="Browse" (onClick)="browseFor = 'source'; browser = true; loadDir('')" />
-              <p-button label="Add" icon="pi pi-plus" size="small" [outlined]="true"
-                        [disabled]="!newRef.trim()" (onClick)="addFile()" />
-            </div>
-          }
-
-          @if (addMode === 'link') {
-            <div class="add-row">
-              <input pInputText [(ngModel)]="newRef"
-                     placeholder="https://docs.google.com/spreadsheets/d/..."
-                     (keyup.enter)="addFile()" />
-              <p-button label="Add" icon="pi pi-plus" size="small" [outlined]="true"
-                        [disabled]="!newRef.trim()" (onClick)="addFile()" />
-            </div>
-            <small class="hint">Share as "Anyone with the link: Viewer"</small>
-          }
-
-          @if (addMode === 'drive') {
-            @if (!driveStatus()?.configured) {
-              <p-message severity="warn"
-                text="Google Drive not configured: set GOOGLE_CLIENT_ID in .env" />
-            } @else if (!driveStatus()?.connected) {
-              <div class="add-row">
-                <p-button label="Connect Google Drive" icon="pi pi-google" size="small"
-                          [loading]="driveConnecting()" (onClick)="connectDrive()" />
-                <small class="hint">Read-only access</small>
-              </div>
-            } @else {
-              <div class="add-row">
-                <p-tag [value]="driveStatus()!.email ?? 'connected'" severity="success" />
-                <p-button label="Pick from Drive" icon="pi pi-external-link" size="small"
-                          [loading]="pickingDrive()" (onClick)="openDrivePicker('source')" />
-                <p-button label="Disconnect" size="small" [text]="true" severity="danger"
-                          (onClick)="disconnectDrive()" />
-              </div>
-            }
-            @if (driveError()) { <p-message severity="error" [text]="driveError()!" /> }
-          }
+          <p-button label="Upload files" icon="pi pi-upload" size="small"
+                    [outlined]="true" (onClick)="fileInput2.click()" />
+          <input #fileInput2 type="file" multiple accept=".xlsx,.xlsm,.csv" hidden
+                 (change)="onFileSelect($event)" />
         </div>
 
-        @if (sourceRefs.length) {
-          <div class="file-list">
-            @for (ref of sourceRefs; track ref; let i = $index) {
-              <div class="file-row" [class.file-ok]="fileStatus(ref) === 'valid' || fileStatus(ref) === 'pushed'"
-                   [class.file-err]="fileStatus(ref) === 'error' || fileStatus(ref) === 'failed'">
-                <i class="pi pi-file file-icon"></i>
-                <div class="file-info">
-                  <span class="file-name">{{ fileName(ref) }}</span>
-                  <span class="file-path">{{ ref }}</span>
-                  @if (fileResult(ref); as r) {
-                    <span class="file-meta" [class.file-meta-err]="r.status === 'error' || r.status === 'failed'">
-                      {{ r.message }}
-                    </span>
-                  }
-                </div>
-                <div class="file-status">
-                  @if (fileStatus(ref) === 'valid' || fileStatus(ref) === 'pushed') {
-                    <i class="pi pi-check-circle status-ok"></i>
-                  } @else if (fileStatus(ref) === 'error' || fileStatus(ref) === 'failed') {
-                    <i class="pi pi-times-circle status-err"></i>
-                  }
-                </div>
-                <p-button icon="pi pi-times" size="small" [text]="true" severity="danger"
-                          pTooltip="Remove" (onClick)="removeFile(i)" />
-              </div>
-            }
-          </div>
-        } @else {
-          <p class="muted">No files added yet.</p>
-        }
-      </p-card>
+        <div class="drop-zone" [class.drop-active]="dragOver"
+             (dragover)="onDragOver($event)" (dragleave)="dragOver = false"
+             (drop)="onDrop($event)" (click)="fileInput3.click()">
+          <i class="pi pi-cloud-upload drop-icon"></i>
+          <span>Drop .xlsx or .csv files here, or click to browse</span>
+          <small class="hint">Max 20 files, 20 MB each</small>
+          <input #fileInput3 type="file" multiple accept=".xlsx,.xlsm,.csv" hidden
+                 (change)="onFileSelect($event)" />
+        </div>
+
+        <div class="selected-header">Selected files ({{ uploadedFiles.length + sourceRefs.length }})</div>
+
+        <div class="table-wrap-inner">
+          <table class="files-table">
+            <thead>
+              <tr>
+                <th>File name</th><th>Size</th><th>Status</th><th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (f of uploadedFiles; track f.name; let i = $index) {
+                <tr>
+                  <td>{{ f.name }}</td>
+                  <td>{{ (f.size / 1024).toFixed(0) }} KB</td>
+                  <td>
+                    @if (fileStatus(f.name) === 'valid' || fileStatus(f.name) === 'pushed') {
+                      <i class="pi pi-check-circle status-ok"></i>
+                    } @else if (fileStatus(f.name) === 'error' || fileStatus(f.name) === 'failed') {
+                      <i class="pi pi-times-circle status-err"></i>
+                    } @else {
+                      <span class="muted">Pending</span>
+                    }
+                  </td>
+                  <td>
+                    <p-button icon="pi pi-times" size="small" [text]="true" severity="danger"
+                              pTooltip="Remove" (onClick)="removeUpload(i)" />
+                  </td>
+                </tr>
+              }
+              @for (ref of sourceRefs; track ref; let i = $index) {
+                <tr>
+                  <td>{{ fileName(ref) }}</td>
+                  <td>—</td>
+                  <td>
+                    @if (fileStatus(ref) === 'valid' || fileStatus(ref) === 'pushed') {
+                      <i class="pi pi-check-circle status-ok"></i>
+                    } @else if (fileStatus(ref) === 'error' || fileStatus(ref) === 'failed') {
+                      <i class="pi pi-times-circle status-err"></i>
+                    } @else {
+                      <span class="muted">Pending</span>
+                    }
+                  </td>
+                  <td>
+                    <p-button icon="pi pi-times" size="small" [text]="true" severity="danger"
+                              pTooltip="Remove" (onClick)="removeFile(i)" />
+                  </td>
+                </tr>
+              }
+              @if (!uploadedFiles.length && !sourceRefs.length) {
+                <tr>
+                  <td colspan="4">
+                    <div class="empty-state">
+                      <div class="empty-state-icon"><i class="pi pi-list"></i></div>
+                      <p class="empty-state-title">No files selected yet</p>
+                      <p class="empty-state-desc">Upload one or more files to continue.</p>
+                    </div>
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       <!-- Validation results -->
       @if (validateResult()) {
-        <p-card>
-          <ng-template #title>Validation results</ng-template>
+        <div class="section-card">
+          <div class="section-title">Validation results</div>
 
           <div class="batch-stats">
             <div class="push-stat">
@@ -221,7 +183,6 @@ import {
             <p-message severity="success" text="All files are valid and ready to push." />
           }
 
-          <!-- Per-file detail -->
           <div class="val-list">
             @for (r of validateResult()!.results; track r.ref) {
               <div class="val-file" [class.val-ok]="r.status === 'valid'"
@@ -269,13 +230,13 @@ import {
               </div>
             }
           </div>
-        </p-card>
+        </div>
       }
 
       <!-- Push result -->
       @if (pushResult()) {
-        <p-card>
-          <ng-template #title>Push complete</ng-template>
+        <div class="section-card">
+          <div class="section-title">Push complete</div>
           <div class="batch-stats">
             <div class="push-stat">
               <span class="push-stat-value">{{ pushResult()!.pushed }}</span>
@@ -310,7 +271,7 @@ import {
               </div>
             }
           </div>
-        </p-card>
+        </div>
       }
 
       <!-- Error -->
@@ -320,65 +281,23 @@ import {
       <div class="actions">
         <p-button label="Validate all" icon="pi pi-check" size="small"
                   [outlined]="true" [loading]="validating()"
-                  [disabled]="!configRef || !sourceRefs.length"
+                  [disabled]="!configRef || (!sourceRefs.length && !uploadedFiles.length)"
                   pTooltip="Check all files against the configuration" tooltipPosition="top"
                   (onClick)="validate()" />
-        <p-button label="Push all" icon="pi pi-database" size="small" severity="success"
+        <p-button label="Push all" icon="pi pi-play" size="small" severity="success"
                   [loading]="pushing()" [disabled]="!canPush()"
                   pTooltip="Push all valid files to the database" tooltipPosition="top"
                   (onClick)="push()" />
       </div>
     </div>
 
-    <!-- Browse dialog -->
-    <p-dialog header="Browse workbook directory" [(visible)]="browser" [modal]="true"
-              [style]="{ width: '44rem', maxWidth: '94vw' }">
-      <div class="picker">
-        @if (!wdirRoot()) {
-          <p-message severity="warn"
-            text="No workbook directory configured: set WORKBOOK_DIR in .env." />
-        } @else {
-          <div class="picker-bar">
-            <small class="muted">{{ wdirRoot() }}</small>
-            @if (wdirFolder()) {
-              <small class="muted">/ {{ wdirFolder() }}</small>
-              <p-button label="Back" icon="pi pi-arrow-left" size="small" [text]="true"
-                        (onClick)="wdirUp()" />
-            }
-          </div>
-          <div class="file-list">
-            @for (item of wdirItems(); track item.path) {
-              <div class="file-row" (click)="pickItem(item)" style="cursor: pointer;">
-                <i class="pi" [class.pi-folder]="item.kind === 'folder'"
-                   [class.pi-file]="item.kind === 'file'" class="file-icon"></i>
-                <div class="file-info">
-                  <span class="file-name">{{ item.name }}</span>
-                  @if (item.size) {
-                    <span class="file-path">{{ (item.size / 1024).toFixed(0) }} KB</span>
-                  }
-                </div>
-                @if (item.kind === 'file') {
-                  <p-button label="Select" size="small" (onClick)="pickItem(item); $event.stopPropagation()" />
-                }
-              </div>
-            }
-            @if (!wdirItems().length) {
-              <p class="muted">No .xlsx files here.</p>
-            }
-          </div>
-        }
-      </div>
-    </p-dialog>
-
-
   `,
   styles: `
-    .page { display: grid; gap: 1rem; padding: 1.25rem; margin: 0 auto; }
-    .page > p-card.setup { max-width: 44rem; margin: 0 auto; width: 100%; }
-    h2 { margin: 0; font-size: 1.1rem; }
-    .subtitle { font-size: .8rem; color: var(--text-secondary); margin: 0; }
+    .page { display: grid; gap: 1rem; padding: 1.5rem 2rem; }
 
-    .card-title-row { display: flex; align-items: center; justify-content: space-between; }
+    .section-card-header { display: flex; align-items: flex-start; justify-content: space-between;
+                           gap: 1rem; margin-bottom: .75rem; }
+
     .config-row, .add-row { display: flex; gap: .4rem; align-items: center; }
     .config-result { display: flex; gap: .5rem; align-items: center; padding: .4rem .5rem;
                      border: 1px solid var(--border); border-radius: var(--radius-sm);
@@ -388,18 +307,23 @@ import {
                                 flex: 1; overflow: hidden; text-overflow: ellipsis;
                                 white-space: nowrap; }
     .add-section { display: grid; gap: .4rem; }
-    .mode-tabs { display: flex; gap: 0; }
-    .tab { display: flex; align-items: center; gap: .3rem; padding: .3rem .6rem;
-           font-size: .75rem; background: transparent; border: none; color: var(--text-secondary);
-           cursor: pointer; border-radius: var(--radius-sm); transition: all .15s; }
-    .tab:hover { color: var(--text); background: var(--surface-hover); }
-    .tab.active { color: var(--primary); font-weight: 600; background: var(--primary-soft); }
-    .tab .pi { font-size: .7rem; }
     .hint { font-size: .7rem; color: var(--text-secondary); }
     .config-row input, .add-row input { flex: 1; min-width: 0; }
 
-    .file-count { font-size: .75rem; font-weight: 400; color: var(--text-secondary);
-                  margin-left: .5rem; }
+    .selected-header { font-size: .85rem; font-weight: 600; margin-top: 1rem; margin-bottom: .35rem; }
+
+    /* Files table */
+    .table-wrap-inner { border: 1px solid var(--border); border-radius: var(--radius-sm);
+                        overflow: hidden; }
+    .files-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+    .files-table th { background: var(--surface-raised-flat); border-bottom: 1px solid var(--border);
+                      font-size: .72rem; font-weight: 600; text-transform: uppercase;
+                      letter-spacing: .04em; color: var(--text-secondary);
+                      padding: .55rem .75rem; text-align: left; }
+    .files-table td { border-bottom: 1px solid var(--border); padding: .5rem .75rem;
+                      color: var(--text); }
+    .files-table tbody tr:last-child td { border-bottom: none; }
+    .files-table tbody tr:hover td { background: var(--surface-hover); }
 
     .file-list { display: grid; gap: .25rem; margin-top: .5rem; }
     .file-row { display: flex; gap: .5rem; align-items: center; padding: .45rem .6rem;
@@ -458,8 +382,26 @@ import {
     .val-reason { font-size: .78rem; color: var(--danger); }
 
     .muted { color: var(--text-secondary); font-size: .8rem; }
-    .picker { display: grid; gap: .5rem; }
-    .picker-bar { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
+
+    /* ── Drop zone ── */
+    .drop-zone { display: flex; flex-direction: column; align-items: center; gap: .4rem;
+                 padding: 1.5rem; border: 2px dashed var(--border-strong); border-radius: var(--radius);
+                 cursor: pointer; transition: all .2s; text-align: center;
+                 color: var(--text-secondary); font-size: .82rem; margin-bottom: .25rem; }
+    .drop-zone:hover { border-color: var(--primary); background: var(--primary-soft); }
+    .drop-zone.drop-active { border-color: var(--primary); background: var(--primary-soft);
+                             border-style: solid; }
+    .drop-icon { font-size: 1.5rem; color: var(--primary); }
+
+    /* ── tablet ── */
+    @media (max-width: 1024px) {
+      .page { padding: 1rem; }
+      .section-card-header { flex-direction: column; gap: .35rem; align-items: flex-start; }
+      .drop-zone { padding: 1rem; }
+      .files-table th { font-size: .65rem; padding: .4rem .5rem; }
+      .files-table td { font-size: .75rem; padding: .35rem .5rem; }
+      .val-issue { grid-template-columns: 4.5rem 9rem 1fr; font-size: .7rem; }
+    }
   `,
 })
 export class BatchPage {
@@ -467,12 +409,13 @@ export class BatchPage {
   private gPicker = inject(GooglePicker);
 
   configRef = '';
-  configMode: 'local' | 'link' | 'drive' = 'local';
   newRef = '';
   sourceRefs: string[] = [];
-  browseFor: 'config' | 'source' = 'source';
-  addMode: 'local' | 'link' | 'drive' = 'local';
   expanded: Record<string, boolean> = {};
+
+  // Upload state
+  uploadedFiles: File[] = [];
+  dragOver = false;
 
   testingConfig = signal(false);
   configOk = signal(false);
@@ -490,16 +433,12 @@ export class BatchPage {
   driveError = signal<string | null>(null);
   pickingDrive = signal(false);
 
-  // Browse state
-  browser = false;
-  wdirRoot = signal<string | null>(null);
-  wdirFolder = signal('');
-  wdirItems = signal<WorkbookDirItem[]>([]);
-
   canPush = computed(() => {
     const v = this.validateResult();
     return !!v && v.all_valid && v.valid > 0 && !this.pushResult();
   });
+
+  hasFiles = computed(() => this.sourceRefs.length > 0 || this.uploadedFiles.length > 0);
 
   toggleExpand(ref: string) {
     this.expanded = { ...this.expanded, [ref]: !this.expanded[ref] };
@@ -565,6 +504,52 @@ export class BatchPage {
     return this.fileResult(ref)?.status ?? '';
   }
 
+  // ── file upload ──
+
+  onDragOver(event: DragEvent) {
+    event.preventDefault();
+    this.dragOver = true;
+  }
+
+  onDrop(event: DragEvent) {
+    event.preventDefault();
+    this.dragOver = false;
+    const files = event.dataTransfer?.files;
+    if (files) this.addUploads(Array.from(files));
+  }
+
+  onFileSelect(event: Event) {
+    const input = event.target as HTMLInputElement;
+    if (input.files) this.addUploads(Array.from(input.files));
+    input.value = '';
+  }
+
+  private addUploads(files: File[]) {
+    const allowed = ['.xlsx', '.xlsm', '.csv'];
+    for (const f of files) {
+      const ext = f.name.slice(f.name.lastIndexOf('.')).toLowerCase();
+      if (!allowed.includes(ext)) {
+        this.error.set(`${f.name}: only .xlsx and .csv files are accepted`);
+        return;
+      }
+    }
+    const combined = [...this.uploadedFiles, ...files];
+    if (combined.length > 20) {
+      this.error.set(`Maximum 20 files allowed (you have ${combined.length})`);
+      return;
+    }
+    this.uploadedFiles = combined;
+    this.validateResult.set(null);
+    this.pushResult.set(null);
+    this.error.set(null);
+  }
+
+  removeUpload(index: number) {
+    this.uploadedFiles = this.uploadedFiles.filter((_, i) => i !== index);
+    this.validateResult.set(null);
+    this.pushResult.set(null);
+  }
+
   // ── validate ──
 
   validate() {
@@ -572,10 +557,66 @@ export class BatchPage {
     this.validateResult.set(null);
     this.pushResult.set(null);
     this.error.set(null);
-    this.api.batchValidate(this.configRef, this.sourceRefs).subscribe({
-      next: (r) => { this.validating.set(false); this.validateResult.set(r); },
-      error: (e) => { this.validating.set(false); this.error.set(e.message); },
-    });
+
+    if (this.uploadedFiles.length) {
+      // Validate one file at a time — UI updates after each
+      const results: BatchFileResult[] = [];
+      const files = [...this.uploadedFiles];
+      const seen: Record<string, string> = {};
+
+      const next = (i: number) => {
+        if (i >= files.length) {
+          this.validating.set(false);
+          return;
+        }
+        const file = files[i];
+        // Client-side duplicate check within batch
+        this.api.batchValidateOne(this.configRef, file).subscribe({
+          next: (r) => {
+            // Duplicate content check within this batch
+            if (r.status === 'valid' && r.sha256 && seen[r.sha256]) {
+              r.status = 'error';
+              r.message = `Duplicate content — identical to ${seen[r.sha256]}`;
+            } else if (r.sha256) {
+              seen[r.sha256] = r.name;
+            }
+            results.push(r);
+            const valid = results.filter(x => x.status === 'valid').length;
+            const errors = results.filter(x => x.status === 'error').length;
+            this.validateResult.set({
+              results: [...results],
+              all_valid: errors === 0,
+              total: files.length,
+              valid,
+              errors,
+            });
+            next(i + 1);
+          },
+          error: (e) => {
+            results.push({
+              ref: file.name, name: file.name, status: 'error',
+              message: e.message, rows: 0,
+            });
+            const valid = results.filter(x => x.status === 'valid').length;
+            const errors = results.filter(x => x.status === 'error').length;
+            this.validateResult.set({
+              results: [...results],
+              all_valid: false,
+              total: files.length,
+              valid,
+              errors,
+            });
+            next(i + 1);
+          },
+        });
+      };
+      next(0);
+    } else {
+      this.api.batchValidate(this.configRef, this.sourceRefs).subscribe({
+        next: (r) => { this.validating.set(false); this.validateResult.set(r); },
+        error: (e) => { this.validating.set(false); this.error.set(e.message); },
+      });
+    }
   }
 
   // ── push ──
@@ -583,47 +624,66 @@ export class BatchPage {
   push() {
     this.pushing.set(true);
     this.error.set(null);
-    this.api.batchPush(this.configRef, this.sourceRefs).subscribe({
-      next: (r) => { this.pushing.set(false); this.pushResult.set(r); },
-      error: (e) => { this.pushing.set(false); this.error.set(e.message); },
-    });
-  }
 
-  // ── browse ──
+    if (this.uploadedFiles.length) {
+      // Push one file at a time — UI updates after each
+      const fileResults: BatchFileResult[] = [];
+      const files = [...this.uploadedFiles];
+      let totalRows = 0;
 
-  loadDir(folder: string) {
-    this.api.browseWorkbookDir(folder).subscribe({
-      next: (r) => {
-        this.wdirRoot.set(r.root);
-        this.wdirFolder.set(r.folder);
-        this.wdirItems.set(r.items);
-      },
-    });
-  }
-
-  wdirUp() {
-    const parts = this.wdirFolder().split('/');
-    parts.pop();
-    this.loadDir(parts.join('/'));
-  }
-
-  pickItem(item: WorkbookDirItem) {
-    if (item.kind === 'folder') {
-      this.loadDir(item.path);
-      return;
-    }
-    if (this.browseFor === 'config') {
-      this.configRef = item.path;
-      this.configOk.set(false);
-      this.configError.set(null);
+      const next = (i: number) => {
+        if (i >= files.length) {
+          this.pushing.set(false);
+          return;
+        }
+        const file = files[i];
+        this.api.batchPushOne(this.configRef, file).subscribe({
+          next: (r) => {
+            fileResults.push(r);
+            if (r.rows) totalRows += r.rows;
+            const pushed = fileResults.filter(x => x.status === 'pushed').length;
+            const failed = fileResults.filter(x => x.status === 'failed').length;
+            this.pushResult.set({
+              batch_id: '',
+              files: [...fileResults],
+              total_rows: totalRows,
+              pushed,
+              failed,
+              total: files.length,
+              target: { target: '', database: '', db_schema: '', prefix: '' },
+            });
+            if (r.status === 'failed') {
+              // Stop batch on first failure
+              this.pushing.set(false);
+              return;
+            }
+            next(i + 1);
+          },
+          error: (e) => {
+            fileResults.push({
+              ref: file.name, name: file.name, status: 'failed',
+              message: e.message, rows: 0,
+            });
+            this.pushResult.set({
+              batch_id: '',
+              files: [...fileResults],
+              total_rows: totalRows,
+              pushed: fileResults.filter(x => x.status === 'pushed').length,
+              failed: fileResults.filter(x => x.status === 'failed').length,
+              total: files.length,
+              target: { target: '', database: '', db_schema: '', prefix: '' },
+            });
+            this.pushing.set(false);
+          },
+        });
+      };
+      next(0);
     } else {
-      if (!this.sourceRefs.includes(item.path)) {
-        this.sourceRefs = [...this.sourceRefs, item.path];
-        this.validateResult.set(null);
-        this.pushResult.set(null);
-      }
+      this.api.batchPush(this.configRef, this.sourceRefs).subscribe({
+        next: (r) => { this.pushing.set(false); this.pushResult.set(r); },
+        error: (e) => { this.pushing.set(false); this.error.set(e.message); },
+      });
     }
-    this.browser = false;
   }
 
   // ── google drive ──

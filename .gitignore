@@ -8,7 +8,7 @@
 
 # Local assistant/dev tool config
 .devin/
-.agents/
+
 
 # macOS
 .DS_Store
@@ -35,3 +35,4 @@ dist/
 .vscode/
 *.swp
 clientFiles*/
+app/cache/*

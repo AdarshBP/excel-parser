@@ -107,10 +107,10 @@ List all projects for the current user, newest first.
   {
     "project_id": "abc123",
     "name": "My Project",
-    "source_ref": "examples/01_simple/sales_source.xlsx",
-    "config_ref": "examples/01_simple/sales_config.xlsx",
-    "source_kind": "local",
-    "config_kind": "local",
+    "source_ref": "upload:a1b2c3d4.xlsx?name=sales_source.xlsx",
+    "config_ref": "upload:e5f6g7h8.xlsx?name=sales_config.xlsx",
+    "source_kind": "upload",
+    "config_kind": "upload",
     "target": {},
     "auto_render": false,
     "created_at": "...",
@@ -145,7 +145,7 @@ verify they are accessible. Requires CSRF.
 ```
 
 `source_ref` / `config_ref` accept:
-- Local path (relative to project root or inside `WORKBOOK_DIR`)
+- Upload reference (`upload:<hash>.<ext>`) from browser file pick
 - Google Sheets URL (`https://docs.google.com/spreadsheets/d/...`)
 - Drive reference (`drive:<file_id>`)
 
@@ -371,17 +371,20 @@ type mismatch or skipped row blocks the push. Requires CSRF.
 
 ---
 
-## Runs
+## Runs (Push History)
 
-A run is a recorded push attempt (succeeded or failed).
+Unified push history across both project pushes (from the `run` table) and
+batch pushes (from the `batch` table). Each successfully pushed file in a
+batch becomes its own entry.
 
 ### `GET /api/runs`
 
-List runs for the current user.
+List all push operations for the current user — project and batch combined,
+sorted by time descending.
 
 | Query param | Default | Description |
 |---|---|---|
-| `project_id` | — | Filter by project (optional) |
+| `project_id` | — | Filter by project (optional; excludes batch entries) |
 | `limit` | 50 | Max results (1–200) |
 
 **Response** `200` — array of run summaries
@@ -389,7 +392,7 @@ List runs for the current user.
 [
   {
     "run_id": "...",
-    "project_id": "...",
+    "project_id": "abc123",
     "project_name": "My Project",
     "started_at": "...",
     "finished_at": "...",
@@ -401,10 +404,31 @@ List runs for the current user.
     "row_total": 3,
     "file_id": "uuid...",
     "source_name": "sales_source.xlsx",
-    "config_name": "sales_config.xlsx"
+    "config_name": "sales_config.xlsx",
+    "origin": "project"
+  },
+  {
+    "run_id": "batchid:0",
+    "project_id": null,
+    "project_name": null,
+    "started_at": "...",
+    "finished_at": "...",
+    "status": "succeeded",
+    "target": "postgres",
+    "database": "excel_parser",
+    "db_schema": "swiggy",
+    "prefix": "",
+    "row_total": 217,
+    "file_id": "uuid...",
+    "source_name": "annexure.xlsx",
+    "config_name": "upload:abc.xlsx?name=swiggy_config.xlsx",
+    "origin": "batch"
   }
 ]
 ```
+
+`origin` is `"project"` for design-mode pushes and `"batch"` for batch
+pushes. Batch entries have `project_id` and `project_name` set to `null`.
 
 ---
 
@@ -476,7 +500,8 @@ Validate all source files. Each is checked independently. Requires CSRF.
 ### `POST /api/batch/push`
 
 Push all source files. Re-validates first — refuses if any file fails.
-Stops on first push failure. Requires CSRF.
+Stops on first push failure. Records results in the `batch` table so they
+appear in Push history. Requires CSRF.
 
 **Body** — same as `/api/batch/validate`
 
@@ -513,7 +538,7 @@ also checks that `sheet_config` and `column_config` sheets exist.
 
 **Body**
 ```json
-{ "ref": "path/to/file.xlsx", "role": "source" }
+{ "ref": "upload:a1b2c3d4.xlsx", "role": "source" }
 ```
 
 **Response** `200`
@@ -550,39 +575,59 @@ Generate a configuration workbook from a CSV file's headers. CSV only.
 
 ---
 
-### `GET /api/local-workbooks`
+## Data Viewer
 
-List all `.xlsx` and `.csv` files inside the project directory.
+Data comes directly from `load_config_audit` tables in the target database,
+so it works identically for project pushes, batch pushes, and one-off uploads.
+
+### `GET /api/data-viewer/files`
+
+List all files that have been pushed to the database.
+
+| Query param | Default | Description |
+|---|---|---|
+| `search` | `""` | Filter by source name, config ref, schema, or file ID |
+| `limit` | `100` | Max results (1–500) |
 
 **Response** `200`
 ```json
-{
-  "root": "/path/to/excel_parser",
-  "files": ["examples/01_simple/sales_source.xlsx", ...]
-}
+[
+  {
+    "file_id": "a1b2c3d4-...",
+    "source_name": "sales_source.xlsx",
+    "file_sha256": "e5f6...",
+    "source_ref": "upload:abc.xlsx?name=sales_source.xlsx",
+    "config_ref": "upload:def.xlsx?name=sales_config.xlsx",
+    "db_schema": "staging",
+    "pushed_at": "2026-09-10 12:00:00",
+    "row_total": 217,
+    "rows_per_table": { "orders": 122, "summary": 95 },
+    "tables": [
+      {
+        "table_name": "orders",
+        "sheet_name": "Order Level",
+        "header_row": 1,
+        "data_start_row": 2,
+        "data_end_row": null,
+        "column_count": 12,
+        "row_count": 122,
+        "loaded_at": "2026-09-10 12:00:00",
+        "file_sha256": "e5f6..."
+      }
+    ]
+  }
+]
 ```
 
 ---
 
-### `GET /api/workbook-dir`
+### `GET /api/data-viewer/files/{file_id}`
 
-Browse files in the configured `WORKBOOK_DIR` (directory-based picker).
+Detailed metadata for one pushed file. Same shape as the list items above.
 
-| Query param | Default | Description |
-|---|---|---|
-| `folder` | `""` | Relative subfolder to browse into |
+**Response** `200` — same object as above.
 
-**Response** `200`
-```json
-{
-  "root": "/path/to/workbooks",
-  "folder": "",
-  "items": [
-    { "name": "subfolder", "path": "subfolder", "kind": "folder", "size": null },
-    { "name": "data.xlsx", "path": "/path/to/workbooks/data.xlsx", "kind": "file", "size": 12345 }
-  ]
-}
-```
+**Response** `404` — `file_id` not found in any `load_config_audit` table.
 
 ---
 
@@ -731,14 +776,19 @@ Metadata for one Drive file (so a saved `drive:<id>` reference can show a name).
 | `GET` | `/api/projects/{id}/export-csv` | yes | no | Export table as CSV |
 | `POST` | `/api/projects/{id}/push-schema` | yes | yes | Create tables only |
 | `POST` | `/api/projects/{id}/push` | yes | yes | Validate + insert rows |
-| `GET` | `/api/runs` | yes | no | List runs |
+| `GET` | `/api/runs` | yes | no | List runs (project + batch) |
 | `GET` | `/api/runs/{id}` | yes | no | Run details |
-| `POST` | `/api/batch/validate` | yes | yes | Validate multiple files |
-| `POST` | `/api/batch/push` | yes | yes | Push multiple files |
+| `POST` | `/api/batch/validate` | yes | yes | Validate multiple files (by ref) |
+| `POST` | `/api/batch/push` | yes | yes | Push multiple files (by ref) |
+| `POST` | `/api/batch/validate-upload` | yes | yes | Validate uploaded files (multipart) |
+| `POST` | `/api/batch/push-upload` | yes | yes | Push uploaded files (multipart); records batch |
+| `POST` | `/api/batch/validate-one` | yes | yes | Validate single uploaded file |
+| `POST` | `/api/batch/push-one` | yes | yes | Push single uploaded file; records batch |
+| `GET` | `/api/data-viewer/files` | yes | no | List all pushed files |
+| `GET` | `/api/data-viewer/files/{file_id}` | yes | no | Pushed file detail + audit |
+| `POST` | `/api/upload-workbook` | yes | yes | Upload workbook to cache, return ref |
 | `POST` | `/api/test-ref` | yes | no | Test workbook reference |
 | `POST` | `/api/auto-config` | yes | no | Generate config from CSV |
-| `GET` | `/api/local-workbooks` | yes | no | List local files |
-| `GET` | `/api/workbook-dir` | yes | no | Browse WORKBOOK_DIR |
 | `GET` | `/api/drive/status` | yes | no | Drive connection status |
 | `POST` | `/api/drive/connect` | yes | yes | Start OAuth flow |
 | `GET` | `/api/auth/callback/google` | no | no | OAuth callback |
@@ -747,4 +797,4 @@ Metadata for one Drive file (so a saved `drive:<id>` reference can show a name).
 | `GET` | `/api/drive/files` | yes | no | Browse Drive files |
 | `GET` | `/api/drive/files/{id}` | yes | no | Drive file metadata |
 
-**Total: 32 endpoints**
+**Total: 38 endpoints**

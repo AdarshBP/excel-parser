@@ -16,8 +16,12 @@ import { RunSummary } from '../core/models';
             InputTextModule, SelectModule, TagModule],
   template: `
     <div class="page">
-      <h2>Push history</h2>
-      <p class="subtitle">Timeline of all push operations across your projects.</p>
+      <div class="page-header">
+        <div class="page-header-left">
+          <h1 class="page-title">Push history</h1>
+          <p class="page-subtitle">Timeline of all push operations.</p>
+        </div>
+      </div>
 
       <!-- Filters -->
       <div class="filters">
@@ -36,7 +40,12 @@ import { RunSummary } from '../core/models';
               <div class="tl-dot"></div>
               <div class="tl-card">
                 <div class="tl-header">
-                  <a [routerLink]="['/run', r.run_id]" class="tl-project">{{ r.project_name }}</a>
+                  @if (r.origin === 'batch') {
+                    <span class="tl-project tl-batch-label">{{ r.config_name || 'Batch' }}</span>
+                    <p-tag value="batch" severity="info" />
+                  } @else {
+                    <a [routerLink]="['/run', r.run_id]" class="tl-project">{{ r.project_name }}</a>
+                  }
                   <p-tag [value]="r.status"
                          [severity]="r.status === 'succeeded' ? 'success' : r.status === 'rolled_back' ? 'warn' : 'danger'" />
                   <span class="tl-time">{{ r.started_at | date: 'medium' }}</span>
@@ -66,10 +75,12 @@ import { RunSummary } from '../core/models';
                   </div>
                 </div>
                 <div class="tl-actions">
-                  <p-button label="Details" size="small" [text]="true" icon="pi pi-arrow-right"
-                            [routerLink]="['/run', r.run_id]" />
-                  <p-button label="Project" size="small" [text]="true" icon="pi pi-external-link"
-                            [routerLink]="['/project', r.project_id]" />
+                  @if (r.origin === 'project') {
+                    <p-button label="Details" size="small" [text]="true" icon="pi pi-arrow-right"
+                              [routerLink]="['/run', r.run_id]" />
+                    <p-button label="Project" size="small" [text]="true" icon="pi pi-external-link"
+                              [routerLink]="['/project', r.project_id]" />
+                  }
                 </div>
               </div>
             </div>
@@ -89,9 +100,7 @@ import { RunSummary } from '../core/models';
     </div>
   `,
   styles: `
-    .page { display: grid; gap: 1rem; padding: 1.25rem; max-width: 52rem; margin: 0 auto; }
-    h2 { margin: 0; font-size: 1.1rem; }
-    .subtitle { font-size: .8rem; color: var(--text-secondary); margin: 0; }
+    .page { display: grid; gap: 1rem; padding: 1.5rem 2rem; max-width: 52rem; }
 
     .filters { display: flex; gap: .5rem; align-items: center; }
     .filter-input { flex: 1; min-width: 0; }
@@ -114,7 +123,8 @@ import { RunSummary } from '../core/models';
     .tl-header { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
     .tl-project { font-weight: 600; font-size: .85rem; color: var(--primary);
                   text-decoration: none; }
-    .tl-project:hover { text-decoration: underline; }
+    a.tl-project:hover { text-decoration: underline; }
+    .tl-batch-label { color: var(--text); }
     .tl-time { font-size: .7rem; color: var(--text-secondary); margin-left: auto; }
 
     .tl-body { margin-top: .3rem; }

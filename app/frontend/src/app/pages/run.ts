@@ -25,7 +25,7 @@ import { RunDetail } from '../core/models';
               <span class="grow"></span>
               <p-button label="Open configuration" size="small" [outlined]="true"
                         [routerLink]="['/project', r.project_id]" />
-              <p-button label="My work" size="small" [text]="true" routerLink="/work" />
+              <p-button label="Configurations" size="small" [text]="true" routerLink="/work" />
             </div>
           </ng-template>
           <div class="kv">

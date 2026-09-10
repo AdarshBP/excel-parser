@@ -140,7 +140,7 @@ def main(source: Path, target: Path) -> None:
 
     cc = out.create_sheet("column_config")
     cc.append(["table_name", "source_ref", "source_header", "column_name", "data_type",
-               "nullable", "is_key", "transform", "column_order"])
+               "nullable", "is_key", "column_order"])
 
     tc = out.create_sheet("target_config", 0)
     tc.append(["setting", "value", "notes"])
@@ -161,7 +161,7 @@ def main(source: Path, target: Path) -> None:
 
         order = 1
         for name, dtype, ref in DERIVED.get(table, []):
-            cc.append([table, ref, "", name, dtype, "Y", "N", "trim", order])
+            cc.append([table, ref, "", name, dtype, "Y", "N", order])
             order += 1
 
         if layout == "key_value":
@@ -169,7 +169,7 @@ def main(source: Path, target: Path) -> None:
                 ("field_label", "text", "col:B", "Y"),
                 ("field_value", "text", "col:C", "N"),
             ]:
-                cc.append([table, ref, "", name, dtype, "N", key, "trim", order])
+                cc.append([table, ref, "", name, dtype, "N", key, order])
                 order += 1
             continue
 
@@ -186,10 +186,9 @@ def main(source: Path, target: Path) -> None:
             while name in seen:
                 name, n = f"{base}_{n}", n + 1
             seen.add(name)
-            transform = {"numeric": "money", "date": "date", "timestamp": "date"}.get(dtype, "trim")
             is_key = "Y" if name in ("order_id", "s_no") else "N"
             cc.append([table, f"col:{get_column_letter(col)}", header.strip(), name,
-                       dtype, "Y", is_key, transform, order])
+                       dtype, "Y", is_key, order])
             order += 1
 
     doc = out.create_sheet("readme", 0)
@@ -216,7 +215,7 @@ def main(source: Path, target: Path) -> None:
         ["column_config", "one row per column of a target table"],
         ["  source_ref", "col:<letter> = read that excel column"],
         ["  data_type", "text | numeric | integer | date | timestamp | boolean"],
-        ["  transform", "trim | money (strips currency/commas) | date | none"],
+        ["  column_order", "position in the table (1, 2, 3...)"],
         ["  is_key", "Y marks a natural key column (used for the unique index)"],
         [],
         ["Every generated table also carries the lineage columns "

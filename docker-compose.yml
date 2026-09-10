@@ -25,9 +25,6 @@ services:
       PYTHONUNBUFFERED: 1
     volumes:
       - backend-cache:/excel_parser/app/cache
-      # Uncomment to also serve local files from the host:
-      # - ./workbooks:/excel_parser/workbooks:ro
-      # And add this to .env: WORKBOOK_DIR=/excel_parser/workbooks
     expose:
       - "8000"
     healthcheck:

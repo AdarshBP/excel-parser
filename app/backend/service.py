@@ -15,6 +15,13 @@ import state
 
 PREVIEW_LIMIT = 20
 MAX_PREVIEW_LIMIT = 200
+
+
+def _display_name(path: Path, ref: str) -> str:
+    """The user-facing name: original filename for upload refs, path.name otherwise."""
+    if sources.looks_like_upload(ref):
+        return sources.upload_original_name(ref)
+    return path.name
 DATA_DIR = state.APP_DIR / "data"
 
 
@@ -96,8 +103,10 @@ def render(project, limit: int = PREVIEW_LIMIT) -> dict:
         "issues": issues,
         "previews": previews,
         "target": target_of(config, overrides),
-        "source": {"name": source.name, "ref": project["source_ref"]},
-        "config": {"name": config.name, "ref": project["config_ref"]},
+        "source": {"name": _display_name(source, project["source_ref"]),
+                   "ref": project["source_ref"]},
+        "config": {"name": _display_name(config, project["config_ref"]),
+                   "ref": project["config_ref"]},
         "can_push": not errors,
         "rendered_at": state.now(),
         "preview_limit": min(limit, MAX_PREVIEW_LIMIT),
@@ -187,7 +196,8 @@ def push(project) -> dict:
         "rows_per_table": result.per_table, "skipped_rows": result.skipped_rows,
         "bad_cells": result.bad_cells, "target_label": result.target,
         "target": where, "issues": issues, "log": lines,
-        "source_name": source.name, "config_name": config.name,
+        "source_name": _display_name(source, project.get("source_ref", "")),
+        "config_name": _display_name(config, project.get("config_ref", "")),
     }
 
 

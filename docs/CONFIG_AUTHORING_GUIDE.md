@@ -269,7 +269,7 @@ Every data table gets these columns for free (do NOT add them to `column_config`
 file_id            -- UUID identifying this load
 file_name          -- source file name at load time
 file_sha256        -- SHA-256 hash of the source file (for dedup)
-source_ref         -- original reference (Drive link, Sheets URL, or local path)
+source_ref         -- original reference (Drive link, Sheets URL, or upload ref)
 sheet_name         -- worksheet the row came from
 source_row_num     -- 1-based Excel row number
 ```

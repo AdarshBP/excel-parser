@@ -39,7 +39,7 @@ ID_TYPES = ("integer", "uuid")
 SHEET_FIELDS = ("table_name", "sheet_name", "layout", "header_row",
                 "data_start_row", "data_end_row", "active", "notes")
 COLUMN_FIELDS = ("table_name", "source_ref", "source_header", "column_name",
-                 "data_type", "nullable", "is_key", "transform", "column_order",
+                 "data_type", "nullable", "is_key", "column_order",
                  "references", "null_default")
 LAYOUTS = ("table", "key_value")
 LINEAGE = ("file_id", "sheet_name", "source_row_num")
@@ -254,8 +254,8 @@ def _check_config(sheets, columns, prefix, issues) -> None:
             issues.append(Issue("warning", where, f"header_row {header} is inside the data range "
                                                   f"- row {start} onwards is read as data"))
         if not end:
-            issues.append(Issue("warning", where, "no data_end_row - reading to the last used row; "
-                                                  "set it if a totals row or another block follows"))
+            issues.append(Issue("warning", where, "No end row set — reads to the last row. "
+                                                  "Set data_end_row if the sheet has totals or notes below the data."))
 
         cols = columns.get(sheet["table_name"], [])
         if not cols:
@@ -358,8 +358,8 @@ def _check_source(sheets, columns, source: Path, issues) -> None:
         table, name = str(sheet["table_name"]).strip(), str(sheet.get("sheet_name") or "").strip()
         where = f"{source.name}[{name}]"
         if name not in wb.sheetnames:
-            issues.append(Issue("error", where, f"worksheet is missing - table {table} cannot be loaded "
-                                                f"(tabs present: {', '.join(wb.sheetnames)})"))
+            issues.append(Issue("error", where, f"Sheet \"{name}\" not found in the source file. "
+                                                f"Available sheets: {', '.join(wb.sheetnames)}"))
             continue
         ws = wb[name]
         try:
@@ -368,8 +368,8 @@ def _check_source(sheets, columns, source: Path, issues) -> None:
             continue                                    # already reported by _check_config
         end = int(sheet["data_end_row"]) if sheet.get("data_end_row") else ws.max_row
         if start > ws.max_row:
-            issues.append(Issue("warning", where, f"data_start_row {start} is past the last used row "
-                                                  f"{ws.max_row} - {table} would load 0 rows"))
+            issues.append(Issue("warning", where, f"Start row {start} is past the last row in the sheet "
+                                                  f"(row {ws.max_row}) — this table will be empty"))
             continue
 
         cols = []
@@ -381,8 +381,8 @@ def _check_source(sheets, columns, source: Path, issues) -> None:
             index = column_index_from_string(letter)
             if index > ws.max_column:
                 issues.append(Issue("error", f"{where}!{letter}",
-                                    f"column {letter} is past the last used column - "
-                                    f"{table}.{col['column_name']} would always be empty"))
+                                    f"Column {letter} (\"{col['column_name']}\") is beyond the "
+                                    f"data in the sheet — the source file may have fewer columns than expected"))
                 continue
             cols.append((col, letter, index))
 
@@ -401,21 +401,21 @@ def _check_source(sheets, columns, source: Path, issues) -> None:
             for col, letter, exc in bad:
                 severity = "warning" if _nullable(col) else "error"
                 issues.append(Issue(severity, f"{where}!{letter}{row_num}",
-                                    f"{exc} for {table}.{col['column_name']} "
-                                    f"({col.get('data_type')}) - "
-                                    + ("stored as NULL" if severity == "warning"
-                                       else "the column is nullable = N, so the row is skipped")))
+                                    f"Column \"{col['column_name']}\" — value doesn't match "
+                                    f"type \"{col.get('data_type')}\" ({exc}). "
+                                    + ("Stored as empty." if severity == "warning"
+                                       else "This column is required, so the row is skipped.")))
             required = [col["column_name"] for (col, _, _), value in zip(cols, values)
                         if value is None and not _nullable(col)]
             if required:
                 skipped += 1
                 issues.append(Issue("warning", f"{where}!{row_num}",
-                                    f"empty required column(s) {', '.join(required)} - row is skipped"))
+                                    f"Row {row_num} skipped — required column(s) are empty: {', '.join(required)}"))
                 continue
             rows += 1
         if not rows:
-            issues.append(Issue("warning", where, f"{table} would load 0 rows from {name}!{start}-{end}"
-                                                  + (f" ({skipped} skipped)" if skipped else "")))
+            issues.append(Issue("warning", where, f"Empty section — 0 rows found in \"{name}\" rows {start}-{end}"
+                                                  + (f" ({skipped} skipped due to missing data)" if skipped else "")))
 
 
 def _nullable(col) -> bool:

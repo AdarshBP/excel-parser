@@ -158,7 +158,7 @@ predicts exactly what the executor then reports (same skipped rows, same
 unconvertible cell).
 
 On top of that sits the application in `app/`: log in, save a configuration
-(source + configuration workbook, each a file path browsed from `WORKBOOK_DIR`,
+(source + configuration workbook, each uploaded from your computer,
 a direct Google Sheets link, or a file picked from Google Drive - each with a
 test-access button that verifies the file is reachable), see the schema as a
 draggable ER diagram (block tables, `file_id` -> `source_file` lineage edges,

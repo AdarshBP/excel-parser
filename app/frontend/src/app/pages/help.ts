@@ -1,15 +1,19 @@
 import { Component } from '@angular/core';
-import { CardModule } from '@openng/optimus-ui/card';
 
 @Component({
   selector: 'app-help',
-  imports: [CardModule],
+  imports: [],
   template: `
     <div class="page">
-      <h2>Help</h2>
+      <div class="page-header">
+        <div class="page-header-left">
+          <h1 class="page-title">Help</h1>
+          <p class="page-subtitle">Keyboard shortcuts, status indicators, and workbook sources.</p>
+        </div>
+      </div>
 
-      <p-card>
-        <ng-template #title>Keyboard shortcuts</ng-template>
+      <div class="section-card">
+        <div class="section-title">Keyboard shortcuts</div>
         <p class="hint">Shortcuts work on the project page. Use
           <kbd>{{ mod }}</kbd> as the modifier key.</p>
 
@@ -62,10 +66,10 @@ import { CardModule } from '@openng/optimus-ui/card';
             </div>
           </div>
         </div>
-      </p-card>
+      </div>
 
-      <p-card>
-        <ng-template #title>Sync status indicator</ng-template>
+      <div class="section-card">
+        <div class="section-title">Sync status indicator</div>
         <div class="shortcuts">
           <div class="row">
             <span class="dot dot-ok"></span>
@@ -92,17 +96,18 @@ import { CardModule } from '@openng/optimus-ui/card';
             </div>
           </div>
         </div>
-      </p-card>
+      </div>
 
-      <p-card>
-        <ng-template #title>Workbook sources</ng-template>
+      <div class="section-card">
+        <div class="section-title">Workbook sources</div>
         <div class="shortcuts">
           <div class="row">
             <kbd class="icon">📁</kbd>
             <div>
-              <div class="action">Local file</div>
-              <div class="desc">A path on the server inside the configured WORKBOOK_DIR.
-                Use "Browse" to pick from the directory tree.</div>
+              <div class="action">Browse (local upload)</div>
+              <div class="desc">Pick a file from your computer using the OS file picker.
+                The browser holds a reference so the file can be re-read on render/push
+                without re-selecting (Chrome/Edge only).</div>
             </div>
           </div>
           <div class="row">
@@ -122,12 +127,11 @@ import { CardModule } from '@openng/optimus-ui/card';
             </div>
           </div>
         </div>
-      </p-card>
+      </div>
     </div>
   `,
   styles: `
-    .page { display: grid; gap: 1rem; padding: 1.25rem; max-width: 44rem; margin: 0 auto; }
-    h2 { margin: 0; font-size: 1.1rem; }
+    .page { display: grid; gap: 1rem; padding: 1.5rem 2rem; max-width: 48rem; }
     .hint { font-size: .78rem; color: var(--text-secondary); margin: 0 0 .75rem; }
     .hint kbd { font-size: .72rem; padding: .15rem .35rem; background: var(--surface-hover);
                 border: 1px solid var(--border); border-radius: var(--radius-sm); }

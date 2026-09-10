@@ -1,7 +1,6 @@
 """Where a workbook comes from. Three kinds of reference:
 
-    local   examples/01_simple/sales_source.xlsx   a path inside the project
-            /abs/path/inside/WORKBOOK_DIR/file.xlsx  or the configured workbook dir
+    upload  upload:<hash>.<ext>                    browser-uploaded file in cache/
     link    https://docs.google.com/spreadsheets/d/<id>/edit   a shared link
     drive   drive:<file id>                        picked from Google Drive
 
@@ -22,6 +21,7 @@ import state
 
 CACHE = state.APP_DIR / "cache"
 DRIVE_PREFIX = "drive:"
+UPLOAD_PREFIX = "upload:"
 ALLOWED_SUFFIXES = {".xlsx", ".xlsm", ".csv"}
 SHEET_ID = re.compile(r"/spreadsheets/d/([a-zA-Z0-9-_]+)")
 GID = re.compile(r"[#&?]gid=(\d+)")
@@ -41,10 +41,16 @@ def looks_like_drive(value: str) -> bool:
     return value.strip().startswith(DRIVE_PREFIX)
 
 
+def looks_like_upload(value: str) -> bool:
+    return value.strip().startswith(UPLOAD_PREFIX)
+
+
 def kind_of(value: str) -> str:
     value = value or ""
     if looks_like_drive(value):
         return "drive"
+    if looks_like_upload(value):
+        return "upload"
     return "sheet" if looks_like_sheet(value) else "local"
 
 
@@ -56,26 +62,12 @@ def drive_file_id(value: str) -> str:
     return rest
 
 
-def workbook_dir() -> Path | None:
-    """The configured external workbook directory, or None."""
-    raw = os.environ.get("WORKBOOK_DIR", "").strip()
-    if not raw:
-        return None
-    path = Path(raw).resolve()
-    if not path.is_dir():
-        return None
-    return path
-
-
 def _safe_local(value: str) -> Path:
-    """A local path, forced to stay inside the project directory or WORKBOOK_DIR."""
+    """A local path, forced to stay inside the project directory."""
     raw = Path(value.strip()).expanduser()
     path = (raw if raw.is_absolute() else state.PROJECT_ROOT / raw).resolve()
     root = state.PROJECT_ROOT.resolve()
-    wdir = workbook_dir()
-    inside_project = (root == path or root in path.parents)
-    inside_wdir = wdir and (wdir == path or wdir in path.parents)
-    if not inside_project and not inside_wdir:
+    if not (root == path or root in path.parents):
         raise SourceError("that path is outside the allowed directories")
     if path.suffix.lower() not in ALLOWED_SUFFIXES:
         raise SourceError(f"{path.name}: expected an .xlsx workbook or .csv file")
@@ -132,11 +124,38 @@ def _download_drive(value: str, user_id: str) -> Path:
         raise SourceError(str(exc)) from exc
 
 
+def upload_original_name(value: str) -> str:
+    """Extract the original filename from ``upload:<hash>.<ext>?name=original.xlsx``."""
+    from urllib.parse import unquote
+    rest = value.strip()[len(UPLOAD_PREFIX):]
+    if "?name=" in rest:
+        return unquote(rest.split("?name=", 1)[1])
+    return rest.split("?", 1)[0]
+
+
+def _resolve_upload(value: str) -> Path:
+    """An uploaded file cached at ``CACHE/<hash>.<ext>``."""
+    rest = value.strip()[len(UPLOAD_PREFIX):].split("?", 1)[0]
+    if not rest or "/" in rest or "\\" in rest:
+        raise SourceError("invalid upload reference")
+    path = (CACHE / rest).resolve()
+    if CACHE.resolve() not in path.parents and CACHE.resolve() != path.parent:
+        raise SourceError("invalid upload reference")
+    if path.suffix.lower() not in ALLOWED_SUFFIXES:
+        raise SourceError(f"{path.name}: expected an .xlsx workbook or .csv file")
+    if not path.is_file():
+        raise SourceError(
+            "uploaded file has expired — please re-select the file from your computer")
+    return path
+
+
 def resolve(value: str, label: str = "workbook", user_id: str = None) -> Path:
     """A local .xlsx for this reference, fetching it from Google if needed."""
     value = (value or "").strip()
     if not value:
         raise SourceError(f"no {label} given")
+    if looks_like_upload(value):
+        return _resolve_upload(value)
     if looks_like_drive(value):
         return _download_drive(value, user_id)
     return _download_sheet(value, label) if looks_like_sheet(value) else _safe_local(value)
@@ -148,8 +167,22 @@ def fingerprint(value: str, label: str = "workbook", user_id: str = None) -> dic
     For Drive files, uses the cached metadata modifiedTime instead of
     re-downloading the entire file — one cheap metadata call per 30 seconds
     instead of a full export on every 5-second poll.
+
+    Upload refs are already local files in cache/.
     """
     value = (value or "").strip()
+    if looks_like_upload(value):
+        display = upload_original_name(value)
+        try:
+            path = _resolve_upload(value)
+        except SourceError:
+            # Cache file missing (cleared or expired) — return a dummy fingerprint
+            # so the status poll doesn't fail. The frontend will detect it needs
+            # re-selection via the file handle check.
+            return {"sha256": "missing", "size": 0, "name": display}
+        data = path.read_bytes()
+        return {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data),
+                "name": display}
     if looks_like_drive(value):
         file_id = drive_file_id(value)
         item = drive.cached_meta(user_id, file_id)
@@ -174,48 +207,4 @@ def snapshot(path: Path, run_id: str, label: str) -> str:
     return str(target)
 
 
-def list_workbooks() -> list:
-    """Every .xlsx and .csv inside the project - what the dev-mode path picker offers."""
-    root = state.PROJECT_ROOT.resolve()
-    skip = {"node_modules", ".git", "cache", "snapshots", "uploads", "dist", ".angular"}
-    found = []
-    for ext in ("*.xlsx", "*.csv"):
-        for path in sorted(root.rglob(ext)):
-            if skip & set(path.relative_to(root).parts):
-                continue
-            found.append(str(path.relative_to(root)))
-    found.sort()
-    return found
 
-
-def browse_workbook_dir(folder: str = "") -> dict:
-    """List .xlsx files and subfolders inside WORKBOOK_DIR for the browser picker.
-
-    Returns {root, folder, items: [{name, path, kind, size}]}.
-    `folder` is a relative path inside WORKBOOK_DIR to browse into.
-    """
-    wdir = workbook_dir()
-    if not wdir:
-        return {"root": None, "folder": "", "items": []}
-
-    if folder:
-        target = (wdir / folder).resolve()
-        if wdir not in target.parents and wdir != target:
-            raise SourceError("folder must be inside the workbook directory")
-    else:
-        target = wdir
-
-    if not target.is_dir():
-        raise SourceError(f"{target} is not a directory")
-
-    items = []
-    for entry in sorted(target.iterdir(), key=lambda p: (p.is_file(), p.name.lower())):
-        if entry.name.startswith("."):
-            continue
-        if entry.is_dir():
-            items.append({"name": entry.name, "path": str(entry.relative_to(wdir)),
-                          "kind": "folder", "size": None})
-        elif entry.suffix.lower() in ALLOWED_SUFFIXES:
-            items.append({"name": entry.name, "path": str(entry),
-                          "kind": "file", "size": entry.stat().st_size})
-    return {"root": str(wdir), "folder": folder, "items": items}

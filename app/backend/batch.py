@@ -21,11 +21,17 @@ def resolve_config(config_ref: str, user_id: str) -> Path:
 
 
 def validate_file(config: Path, source_ref: str, user_id: str,
-                  overrides: dict, target_schema: str = None) -> dict:
-    """Validate one source file against the config. Returns a per-file result dict."""
+                  overrides: dict, target_schema: str = None,
+                  source_path: Path = None) -> dict:
+    """Validate one source file against the config. Returns a per-file result dict.
+
+    If `source_path` is given, it is used directly (for uploaded files that are
+    already on disk in a temp directory). Otherwise `source_ref` is resolved
+    through `sources.resolve()`.
+    """
     name = source_ref.split("/")[-1].split("?")[0]
     try:
-        source = sources.resolve(source_ref, "source", user_id)
+        source = source_path or sources.resolve(source_ref, "source", user_id)
         name = source.name
     except sources.SourceError as exc:
         return {"ref": source_ref, "name": name, "status": "error",
@@ -54,28 +60,39 @@ def validate_file(config: Path, source_ref: str, user_id: str,
     except Exception:
         pass
 
-    # Check for duplicate (already loaded)
+    # Check for duplicate (already loaded into the database)
     sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
     duplicate = False
-    if not errors and target_schema:
+    try:
+        where = engine.validator.resolve_target(
+            config, overrides.get("target"), overrides.get("database"),
+            overrides.get("prefix"), overrides.get("id_type"))
+        engine.dbmod.load_env(state.PROJECT_ROOT / ".env")
+        con = engine.dbmod.connect(where.target, where.database,
+                                   where.prefix, where.db_schema)
         try:
-            where = engine.validator.resolve_target(
-                config, overrides.get("target"), overrides.get("database"),
-                overrides.get("prefix"), overrides.get("id_type"))
-            engine.dbmod.load_env(state.PROJECT_ROOT / ".env")
             if where.target == "postgres":
-                con = engine.dbmod.connect(where.target, where.database,
-                                           where.prefix, where.db_schema)
-                try:
-                    result = con.execute(
-                        f"SELECT 1 FROM {where.prefix}load_config_audit WHERE file_sha256 = %s LIMIT 1",
-                        (sha256,))
-                    # psycopg cursor doesn't have fetchone on execute return in all wrappers
-                except Exception:
-                    result = None
-                con.close()
+                with con.con.cursor() as cur:
+                    cur.execute(
+                        f"SELECT 1 FROM {where.prefix}load_config_audit "
+                        "WHERE file_sha256 = %s LIMIT 1", (sha256,))
+                    duplicate = cur.fetchone() is not None
+            else:
+                row = con.con.execute(
+                    f"SELECT 1 FROM {where.prefix}load_config_audit "
+                    "WHERE file_sha256 = ? LIMIT 1", (sha256,)).fetchone()
+                duplicate = row is not None
         except Exception:
             pass
+        con.close()
+    except Exception:
+        pass
+
+    if duplicate:
+        return {"ref": source_ref, "name": name, "status": "error",
+                "message": "Already loaded — this file has identical content to a previous push",
+                "issues": [], "rows": 0, "tables": 0,
+                "bad_cells": 0, "skipped": 0, "sha256": sha256}
 
     # Count expected rows
     rows, tables = 0, 0
@@ -93,16 +110,21 @@ def validate_file(config: Path, source_ref: str, user_id: str,
                 "issues": errors + warnings, "rows": rows, "tables": tables,
                 "bad_cells": bad_cells, "skipped": skipped, "sha256": sha256}
 
-    if bad_cells or skipped:
+    # bad_cells (type mismatches in required columns) block the push.
+    # skipped rows and empty sections are normal — they become warnings.
+    if bad_cells:
         return {"ref": source_ref, "name": name, "status": "error",
-                "message": f"{bad_cells} type mismatch(es), {skipped} skipped row(s)",
+                "message": f"{bad_cells} value(s) don't match their column type",
                 "issues": errors + warnings, "rows": rows, "tables": tables,
                 "bad_cells": bad_cells, "skipped": skipped, "sha256": sha256}
 
+    message = f"{tables} tables, {rows} rows"
+    if skipped:
+        message += f" ({skipped} empty row(s) skipped)"
     return {"ref": source_ref, "name": name, "status": "valid",
-            "message": f"{tables} tables, {rows} rows",
+            "message": message,
             "issues": warnings, "rows": rows, "tables": tables,
-            "bad_cells": 0, "skipped": 0, "sha256": sha256}
+            "bad_cells": 0, "skipped": skipped, "sha256": sha256}
 
 
 def validate_batch(config_ref: str, source_refs: list, user_id: str,

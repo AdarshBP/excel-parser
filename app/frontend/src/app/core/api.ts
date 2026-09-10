@@ -3,9 +3,10 @@ import { Injectable, inject } from '@angular/core';
 import { Observable, throwError } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import {
-  BatchPushResult, BatchValidateResult,
+  BatchFileResult, BatchPushResult, BatchValidateResult,
+  DataFile,
   DriveFile, DriveStatus, Me, Project, PushResult, RenderResult, RunDetail, RunSummary,
-  Status, TargetInfo, WorkbookDirResult,
+  Status, TargetInfo,
 } from './models';
 
 /** Everything the browser asks the FastAPI backend for. */
@@ -98,6 +99,14 @@ export class Api {
   }
   run(id: string) { return this.get<RunDetail>(`/runs/${id}`); }
 
+  dataFiles(search = '') {
+    const q = search ? `?search=${encodeURIComponent(search)}` : '';
+    return this.get<DataFile[]>(`/data-viewer/files${q}`);
+  }
+  dataFileDetail(fileId: string) {
+    return this.get<DataFile>(`/data-viewer/files/${fileId}`);
+  }
+
   autoConfig(ref: string, tableName?: string, database?: string, dbSchema?: string) {
     return this.send<{ ok: boolean; config_ref: string; name: string }>(
       'post', '/auto-config', { ref, table_name: tableName, database, db_schema: dbSchema });
@@ -109,18 +118,16 @@ export class Api {
 
 
 
+  uploadWorkbook(file: File) {
+    const fd = new FormData();
+    fd.append('file', file);
+    return this.http.post<{ ref: string; name: string; size: number; sha256: string }>(
+      this.base + '/upload-workbook', fd).pipe(catchError((e) => this.fail(e)));
+  }
+
   testRef(ref: string, role: 'source' | 'config' = 'source') {
     return this.send<{ ok: boolean; name: string; sheets: string[]; size: number; role: string }>(
       'post', '/test-ref', { ref, role });
-  }
-
-  localWorkbooks() {
-    return this.get<{ root: string; files: string[] }>('/local-workbooks');
-  }
-
-  browseWorkbookDir(folder = '') {
-    const q = folder ? `?folder=${encodeURIComponent(folder)}` : '';
-    return this.get<WorkbookDirResult>(`/workbook-dir${q}`);
   }
 
   batchValidate(config_ref: string, source_refs: string[]) {
@@ -130,6 +137,38 @@ export class Api {
   batchPush(config_ref: string, source_refs: string[]) {
     return this.send<BatchPushResult>('post', '/batch/push',
       { config_ref, source_refs });
+  }
+
+  batchValidateUpload(configRef: string, files: File[]) {
+    const fd = new FormData();
+    fd.append('config_ref', configRef);
+    files.forEach(f => fd.append('files', f));
+    return this.http.post<BatchValidateResult>(this.base + '/batch/validate-upload', fd)
+      .pipe(catchError((e) => this.fail(e)));
+  }
+  batchPushUpload(configRef: string, files: File[]) {
+    const fd = new FormData();
+    fd.append('config_ref', configRef);
+    files.forEach(f => fd.append('files', f));
+    return this.http.post<BatchPushResult>(this.base + '/batch/push-upload', fd)
+      .pipe(catchError((e) => this.fail(e)));
+  }
+
+  /** Validate a single uploaded file. */
+  batchValidateOne(configRef: string, file: File) {
+    const fd = new FormData();
+    fd.append('config_ref', configRef);
+    fd.append('file', file);
+    return this.http.post<BatchFileResult>(this.base + '/batch/validate-one', fd)
+      .pipe(catchError((e) => this.fail(e)));
+  }
+  /** Push a single uploaded file. */
+  batchPushOne(configRef: string, file: File) {
+    const fd = new FormData();
+    fd.append('config_ref', configRef);
+    fd.append('file', file);
+    return this.http.post<BatchFileResult>(this.base + '/batch/push-one', fd)
+      .pipe(catchError((e) => this.fail(e)));
   }
 
   drivePicker() {

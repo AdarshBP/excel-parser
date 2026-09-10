@@ -18,7 +18,7 @@ inference about what the data "means".
 Every staged row carries its origin — `file_id`, `sheet_name`,
 `source_row_num`, unique together. `source_file` and `load_config_audit` hold
 the file and load metadata. The only real relationship in the schema is
-`file_id → source_file.file_id`; there are no foreign keys between blocks.
+`file_id → load_config_audit.file_id`; there are no foreign keys between blocks.
 
 ## Layout
 
@@ -32,19 +32,25 @@ tools/db.py          the two database targets and the .env reader
 tools/make_template.py, tools/make_examples.py   regenerate template/ and examples 03-05, 07-08
 
 app/backend/         FastAPI: main.py (endpoints), auth.py, state.py (PostgreSQL),
-                     service.py, batch.py, sources.py (local path / direct link / Drive),
+                     service.py, batch.py, sources.py (upload / link / Drive),
                      drive.py (Google OAuth + Drive), users.py (accounts CLI)
 app/frontend/        Angular 22 + Optimus UI (@openng/optimus-ui)
+app/frontend/nginx.conf  production nginx: SPA + /api proxy + upload size
 app/run.sh           starts backend :8000 and frontend :4200
 
 util/seed.sh         create the default user (admin/password)
 util/clear_all.sh    wipe app state (PG schema) + cache, then re-seed
+util/docker-publish.sh  build + push Docker images to Hub
+util/env-switch.sh   switch .env between local/docker/prod
 
 examples/01..11      each folder holds only the two workbooks
 template/            config_template.xlsx — every header explained
-docs/                EXAMPLES.md, CONFIG_RULES.md, RUNNING.md, APP_RUNNING.md, APP_PLAN.md
-Dockerfile           single image: backend + built frontend, PG is external
-docker-compose.yml   dev stack: app + PostgreSQL
+docs/                EXAMPLES.md, CONFIG_RULES.md, RUNNING.md, APP_RUNNING.md, APP_PLAN.md, API.md
+Dockerfile           monolithic image (backend + frontend), PG external
+app/backend/Dockerfile   backend-only image
+app/frontend/Dockerfile  frontend-only image (Angular build + nginx)
+docker-compose.yml       production: pull from Docker Hub
+docker-compose.build.yml dev override: build locally + host.docker.internal
 ```
 
 ## Setup
@@ -54,11 +60,22 @@ pip install -r app/backend/requirements.txt        # backend
 (cd app/frontend && npm ci)                        # needs Node 22+
 ```
 
-Or with Docker:
+Or with Docker (split frontend + backend):
 
 ```bash
-docker compose up                                  # app on :8000, PG on :5432
+# Local dev: build from source
+docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
+
+# Production: pull from Docker Hub
+docker compose up -d
+
+# Build and push images
+./util/docker-publish.sh             # pushes :latest
+./util/docker-publish.sh v1.2.0      # pushes :v1.2.0
 ```
+
+Environment files: `.env.local` (run.sh), `.env.docker` (local Docker),
+`.env.prod` (server). Switch with `./util/env-switch.sh <local|docker|prod>`.
 
 ## Commands
 
@@ -101,11 +118,19 @@ Examples 07 and 08 must fail validation and exit 1 with nothing written.
 * **Design mode** (`/project/:id`): configure source + config workbook, render
   the schema as an ER diagram (with drag, zoom, FK edges), preview data rows,
   see validation + data quality issues, push schema only or schema + data.
-* **Batch mode** (`/batch`): select one config + multiple source files (via
-  file path, Google Sheets link, or Google Drive), validate all at once — push
-  only proceeds when every file passes. Each file gets its own `file_id`.
-* **Side navigation**: collapsible sidebar with My work, Batch run, theme
-  toggle, user info, and a Settings link (gear icon) in the footer.
+* **Batch mode** (`/batch`): select one config + upload multiple source files
+  (drag & drop / file picker, Google Sheets link, or Google Drive). Files are
+  validated and pushed **one at a time** with live progress. Each file gets its
+  own `file_id`. Max 20 files per batch, 20 MB each. Uploaded files are
+  processed in memory — nothing is saved to disk after the request. All batch
+  push endpoints (`push`, `push-one`, `push-upload`) record results in the
+  `batch` table so they appear in Push history.
+* **Data Viewer** (`/data-viewer`): browse all pushed files (from both project
+  and batch pushes), search by name/database, view per-table breakdown with
+  audit metadata from `load_config_audit`. Enable via Settings toggle.
+* **Side navigation**: always-expanded sidebar with branded EP icon,
+  Configurations, Batch run, Data Viewer (optional), Push history, theme
+  toggle, and user avatar with sign-out.
 * **Settings page** (`/settings`): poll interval (5s/10s/15s/30s/60s, default
   10s), Google Drive connection status + disconnect, about section with app
   version + backend version. Persisted in localStorage.
@@ -114,12 +139,16 @@ Examples 07 and 08 must fail validation and exit 1 with nothing written.
   changed, red pulsing dot + "Sync failed" on connection/Drive error.
 * **Tooltips**: all buttons across the app have tooltips with consistent
   positioning.
-* **Strict mode**: type mismatches and skipped rows block the push (no silent
-  NULLs or dropped rows). Rollback on any failure.
+* **Strict mode**: type mismatches block the push. Skipped rows (empty
+  required columns) and empty sections are logged as warnings but do not
+  block — these are normal for multi-block sheets like Swiggy annexures.
 * **`null_default`**: optional column in `column_config` — what to store when
   a cell is empty (e.g. `0` for numeric, `N/A` for text).
 * **`references`**: optional column in `column_config` — declares an FK
   relationship shown as a dashed line in the ER diagram.
+* **`script`**: optional column in `column_config` — post-cast transformations
+  (e.g. `trim|uppercase`, `round_2`, `pct_to_fraction`). 28 scripts available
+  across text, numeric, date, and guard categories. See `CONFIG_RULES.md`.
 * **Dark/light theme**: toggle in the sidebar, persisted in localStorage.
 * **Google Picker API**: Drive file selection uses Google's native Picker UI
   instead of a custom file list dialog. Requires `GOOGLE_API_KEY` in `.env`.
@@ -128,6 +157,14 @@ Examples 07 and 08 must fail validation and exit 1 with nothing written.
 * **Drive caching**: downloads always fresh; metadata cached 30s for poll
   fingerprinting; Drive status cached 10s across components; file names
   cached permanently per session. Auto-test debounced to 800ms.
+* **Browser file pick (File System Access API)**: on Chrome/Edge, users can
+  pick local files via the OS file picker. The browser holds a persistent
+  `FileSystemFileHandle` so files can be re-read on render/push without
+  re-selecting. Files are uploaded to `POST /api/upload-workbook` and stored
+  content-addressed in `cache/` as `upload:<hash>.<ext>` refs. Client-side
+  change detection compares `File.lastModified` on each poll. Not available
+  in Firefox/Safari — those browsers fall back to the Link/Drive modes.
+  Service: `app/frontend/src/app/core/file-handle.ts`.
 
 ## Conventions
 
@@ -153,11 +190,58 @@ Examples 07 and 08 must fail validation and exit 1 with nothing written.
   application user and are never returned by the API.
 * Every value goes to the database as a query parameter; identifiers
   (table/schema names from the workbook) are validated before use.
-* Local paths as a source are restricted to the project directory or
-  `WORKBOOK_DIR`, and are a development convenience only.
+* Workbook sources are browser uploads (content-addressed `upload:` refs in
+  `cache/`), Google Sheets links, or Google Drive files. Local file paths
+  are accepted only for backward compatibility and are restricted to the
+  project directory.
 * Client-facing errors must not carry stack traces or internal paths.
 * Global exception handlers catch DB errors (503) and unhandled errors (500)
   with safe messages; details are logged server-side only.
+
+## Schema evolution
+
+When the configuration adds or removes columns between loads:
+
+* **Column added**: `db.py` detects the new column via `_add_missing_columns()`
+  and runs `ALTER TABLE ADD COLUMN` automatically. New columns are nullable
+  (existing rows get NULL).
+* **Column removed**: the column stays in the database. New rows get a
+  type-appropriate default (0 for numeric, false for boolean, NULL for text/date).
+  The executor detects orphaned columns via `table_columns()` and includes them
+  in the INSERT with defaults. A log line is emitted for each orphaned column.
+* **Dedup**: the executor refuses to load a file with identical SHA256 content.
+  In batch mode, this check runs during validation so duplicates are caught
+  before the user clicks Push.
+* **Deferred schema creation**: `PostgresTarget.__init__()` only sets
+  `search_path` — it never runs `CREATE SCHEMA`. The schema is created inside
+  `ensure_schema()`, which is called only during an actual push. This prevents
+  read-only operations (validation, duplicate checks) from silently recreating
+  a schema that was dropped by `clear_all.sh`.
+
+## Docker deployment
+
+Split architecture: separate frontend (nginx) and backend (FastAPI) containers.
+
+```
+Browser → :4200 (nginx) → /api/* proxied to backend:8000 (internal)
+                        → /*     serves Angular SPA
+```
+
+* `docker-compose.yml` — production: pulls from Docker Hub
+* `docker-compose.build.yml` — dev override: builds locally
+* `app/backend/Dockerfile` — mirrors repo layout at `/excel_parser/` so
+  `state.py`'s `PROJECT_ROOT` resolves correctly
+* `app/frontend/Dockerfile` — Angular build → nginx with SPA fallback
+* `app/frontend/nginx.conf` — proxies `/api`, passes cookies, 50 MB upload limit
+* `.env.example` — template with all settings documented
+* `.env.local` / `.env.docker` / `.env.prod` — per-environment configs (gitignored)
+
+Google OAuth redirect URI must match the entry point:
+* Local dev (`run.sh`): `http://localhost:8000/api/auth/callback/google`
+* Docker / production: `http(s)://<domain>/api/auth/callback/google`
+
+Public pages for Google OAuth verification: `/home`, `/privacy`, `/terms`
+(static HTML in `app/frontend/public/`, served by nginx).
 
 ## Client file examples (12–15)
 

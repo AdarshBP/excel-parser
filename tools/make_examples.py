@@ -25,7 +25,7 @@ TARGET_HEAD = ["setting", "value", "notes"]
 SHEET_HEAD = ["table_name", "sheet_name", "layout", "header_row", "data_start_row",
               "data_end_row", "active", "notes"]
 COLUMN_HEAD = ["table_name", "source_ref", "source_header", "column_name", "data_type",
-               "nullable", "is_key", "transform", "column_order"]
+               "nullable", "is_key", "column_order"]
 
 TARGET_NOTES = {
     "target": "sqlite | postgres",
@@ -74,10 +74,10 @@ def uuid_keys() -> None:
          "table_prefix": None, "id_type": "uuid"},
         [["orders", "Orders", "table", 1, 2, None, "Y",
           "id_type = uuid, so orders_id and file_id are UUIDs"]],
-        [["orders", "col:A", "Order Id", "order_id_ext", "text", "N", "Y", "trim", 1],
-         ["orders", "col:B", "Placed On", "placed_on", "date", "Y", "N", "date", 2],
-         ["orders", "col:C", "Restaurant", "restaurant", "text", "Y", "N", "trim", 3],
-         ["orders", "col:D", "Total", "total", "numeric", "Y", "N", "money", 4]])
+        [["orders", "col:A", "Order Id", "order_id_ext", "text", "N", "Y", 1],
+         ["orders", "col:B", "Placed On", "placed_on", "date", "Y", "N", 2],
+         ["orders", "col:C", "Restaurant", "restaurant", "text", "Y", "N", 3],
+         ["orders", "col:D", "Total", "total", "numeric", "Y", "N", 4]])
 
 
 # ---------------------------------------------------------------- example 05
@@ -97,11 +97,11 @@ def prefixed_postgres() -> None:
          "table_prefix": "stg_", "id_type": "integer"},
         [["ledger", "Ledger", "table", 1, 2, None, "Y",
           "lands as staging.stg_ledger; credentials come from .env"]],
-        [["ledger", "col:A", "Entry Ref", "entry_ref", "text", "N", "Y", "trim", 1],
-         ["ledger", "col:B", "Posted On", "posted_on", "date", "N", "N", "date", 2],
-         ["ledger", "col:C", "Account", "account", "text", "N", "N", "trim", 3],
-         ["ledger", "col:D", "Debit", "debit", "numeric", "Y", "N", "money", 4],
-         ["ledger", "col:E", "Credit", "credit", "numeric", "Y", "N", "money", 5]])
+        [["ledger", "col:A", "Entry Ref", "entry_ref", "text", "N", "Y", 1],
+         ["ledger", "col:B", "Posted On", "posted_on", "date", "N", "N", 2],
+         ["ledger", "col:C", "Account", "account", "text", "N", "N", 3],
+         ["ledger", "col:D", "Debit", "debit", "numeric", "Y", "N", 4],
+         ["ledger", "col:E", "Credit", "credit", "numeric", "Y", "N", 5]])
 
 
 # ---------------------------------------------------------------- example 06
@@ -123,14 +123,13 @@ def data_types() -> None:
          "table_prefix": None, "id_type": "integer"},
         [["card_settlement", "Types", "table", 1, 2, None, "Y",
           "one column per data type; row 6 is skipped - card is nullable = N and empty"]],
-        [["card_settlement", "col:A", "Card", "card", "text", "N", "Y", "trim", 1],
-         ["card_settlement", "col:B", "Amount", "amount", "numeric", "Y", "N", "money", 2],
-         ["card_settlement", "col:C", "Qty", "qty", "integer", "Y", "N", None, 3],
-         ["card_settlement", "col:D", "Settled On", "settled_on", "date", "Y", "N", "date", 4],
-         ["card_settlement", "col:E", "Settled At", "settled_at", "timestamp", "Y", "N",
-          "date", 5],
-         ["card_settlement", "col:F", "Refunded", "refunded", "boolean", "Y", "N", None, 6],
-         ["card_settlement", "col:G", "Tax %", "tax_pct", "numeric", "Y", "N", "percent", 7]])
+        [["card_settlement", "col:A", "Card", "card", "text", "N", "Y", 1],
+         ["card_settlement", "col:B", "Amount", "amount", "numeric", "Y", "N", 2],
+         ["card_settlement", "col:C", "Qty", "qty", "integer", "Y", "N", 3],
+         ["card_settlement", "col:D", "Settled On", "settled_on", "date", "Y", "N", 4],
+         ["card_settlement", "col:E", "Settled At", "settled_at", "timestamp", "Y", "N", 5],
+         ["card_settlement", "col:F", "Refunded", "refunded", "boolean", "Y", "N", 6],
+         ["card_settlement", "col:G", "Tax %", "tax_pct", "numeric", "Y", "N", 7]])
 
 
 # ---------------------------------------------------------------- example 07
@@ -150,11 +149,11 @@ def validation_errors() -> None:
         [["good_rows", "Data", "table", 1, 2, None, "Y", "the only correct block"],
          ["Bad Name", "Data", "table", 1, 2, None, "Y", "table_name with a space"],
          ["bad_rows", "Data", "table", 5, 2, None, "Y", "header_row sits inside the data"]],
-        [["good_rows", "col:A", "Ref", "ref", "text", "N", "Y", "trim", 1],
-         ["good_rows", "col:B", "Amount", "amount", "numeric", "Y", "N", "money", 2],
-         ["good_rows", "col:B", "Amount", "file_id", "numeric", "Y", "N", None, 3],
-         ["Bad Name", "col:A", "Ref", "ref", "text", "N", "Y", "trim", 1],
-         ["bad_rows", "column:X", "Ref", "amount; drop", "money", "N", "Y", "trim", 1]])
+        [["good_rows", "col:A", "Ref", "ref", "text", "N", "Y", 1],
+         ["good_rows", "col:B", "Amount", "amount", "numeric", "Y", "N", 2],
+         ["good_rows", "col:B", "Amount", "file_id", "numeric", "Y", "N", 3],
+         ["Bad Name", "col:A", "Ref", "ref", "text", "N", "Y", 1],
+         ["bad_rows", "column:X", "Ref", "amount; drop", "money", "N", "Y", 1]])
 
 
 # ---------------------------------------------------------------- example 08
@@ -181,13 +180,13 @@ def source_mismatch() -> None:
           "the worksheet does not exist in this month's file"],
          ["stock_empty", "Stock", "table", 1, 90, None, "Y",
           "data_start_row is past the end - 0 rows"]],
-        [["stock", "col:A", "Sku", "sku", "text", "N", "Y", "trim", 1],
-         ["stock", "col:B", "Warehouse", "warehouse", "text", "N", "N", "trim", 2],
-         ["stock", "col:C", "On Hand", "on_hand", "integer", "Y", "N", None, 3],
-         ["stock", "col:D", "Counted On", "counted_on", "date", "Y", "N", "date", 4],
-         ["stock", "col:F", "Batch", "batch", "text", "Y", "N", "trim", 5],
-         ["stock_last_month", "col:A", "Sku", "sku", "text", "N", "Y", "trim", 1],
-         ["stock_empty", "col:A", "Sku", "sku", "text", "N", "Y", "trim", 1]])
+        [["stock", "col:A", "Sku", "sku", "text", "N", "Y", 1],
+         ["stock", "col:B", "Warehouse", "warehouse", "text", "N", "N", 2],
+         ["stock", "col:C", "On Hand", "on_hand", "integer", "Y", "N", 3],
+         ["stock", "col:D", "Counted On", "counted_on", "date", "Y", "N", 4],
+         ["stock", "col:F", "Batch", "batch", "text", "Y", "N", 5],
+         ["stock_last_month", "col:A", "Sku", "sku", "text", "N", "Y", 1],
+         ["stock_empty", "col:A", "Sku", "sku", "text", "N", "Y", 1]])
 
 
 def add_id_type(config: Path) -> bool:

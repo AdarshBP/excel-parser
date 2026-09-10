@@ -33,6 +33,22 @@ import validator
 
 LoadResult = namedtuple("LoadResult", "file_id total per_table skipped_rows bad_cells target")
 
+# Defaults for orphaned columns (exist in DB but removed from config).
+# New rows get these values instead of failing on a missing column.
+_NUMERIC_TYPES = {"numeric", "decimal", "real", "double precision", "float",
+                  "integer", "bigint", "smallint", "int", "int4", "int8", "int2"}
+_BOOL_TYPES = {"boolean", "bool"}
+
+
+def _type_default(db_type: str):
+    """Return a sensible default for a database column type."""
+    t = db_type.lower().strip()
+    if t in _NUMERIC_TYPES:
+        return 0
+    if t in _BOOL_TYPES:
+        return False
+    return None      # text, date, timestamp → NULL
+
 
 def now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
@@ -122,13 +138,34 @@ def execute(config: Path, source: Path, target: str = None, database=None, prefi
             header_row = sheet.get("header_row")
             start, end = rowmod.row_range(sheet, ws)
 
+            # Detect orphaned columns: exist in DB but not in current config.
+            # These get a type-appropriate default on every new row.
+            config_col_names = {str(c["column_name"]).strip() for c in cols}
+            lineage_cols = {"file_id", "file_name", "file_sha256", "source_ref",
+                            "sheet_name", "source_row_num",
+                            f"{str(sheet['table_name']).strip()}_id"}
+            orphaned = []
+            try:
+                db_cols = con.table_columns(table)
+                for db_col, db_type in db_cols.items():
+                    if db_col in config_col_names or db_col in lineage_cols:
+                        continue
+                    default = _type_default(db_type)
+                    orphaned.append((db_col, default))
+                    default_desc = repr(default) if default is not None else "NULL"
+                    log(f"  {table}.{db_col} not in config — new rows get {default_desc}")
+            except Exception:
+                pass
+
             key = dbmod.ident(f"{str(sheet['table_name']).strip()}_id", "column_name")
             lead = ([key] if uuid_keys else []) + [
                 "file_id", "file_name", "file_sha256", "source_ref",
                 "sheet_name", "source_row_num"]
-            insert = (f"INSERT INTO {table} (" + ", ".join(lead) + ", "
-                      + ", ".join(dbmod.ident(c["column_name"], "column_name") for c in cols)
-                      + ") VALUES (" + ", ".join([ph] * (len(lead) + len(cols))) + ")")
+            all_col_names = (lead
+                             + [dbmod.ident(c["column_name"], "column_name") for c in cols]
+                             + [dbmod.ident(o[0], "column_name") for o in orphaned])
+            insert = (f"INSERT INTO {table} (" + ", ".join(all_col_names)
+                      + ") VALUES (" + ", ".join([ph] * len(all_col_names)) + ")")
             loaded = 0
             for row_num in range(start, end + 1):
                 read = rowmod.build_row(ws, cols, row_num)
@@ -146,7 +183,8 @@ def execute(config: Path, source: Path, target: str = None, database=None, prefi
                     continue
                 params = ([str(uuid.uuid4())] if uuid_keys else []) \
                     + [file_id, source.name, digest, source_ref,
-                       name, row_num, *read.values]
+                       name, row_num, *read.values] \
+                    + [default for _, default in orphaned]
                 if loaded < trace:
                     log(f"\n  {name}!{row_num} -> {table}")
                     for ref, raw, column, value in read.cells:
@@ -171,13 +209,15 @@ def execute(config: Path, source: Path, target: str = None, database=None, prefi
             total += loaded
             log(f"{table:<32} {loaded:>4} rows from {name}!{start}-{end}")
 
-        # In strict mode, refuse to commit if any data issues were found
-        if strict and (bad_cells or skipped_rows):
+        # In strict mode, refuse to commit if there are type mismatches.
+        # Skipped rows (empty required columns) are logged but not blocking —
+        # empty sections in multi-block sheets are normal.
+        if strict and bad_cells:
             con.rollback()
             con.close()
             raise SystemExit(
-                f"data quality check failed: {len(bad_cells)} type mismatch(es), "
-                f"{len(skipped_rows)} skipped row(s) — nothing was written")
+                f"data quality check failed: {len(bad_cells)} value(s) don't match "
+                f"their column type — nothing was written")
 
         con.commit()
     except SystemExit:

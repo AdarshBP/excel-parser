@@ -29,8 +29,8 @@ export interface Project {
   render?: RenderResult | null;
 }
 
-/** How a workbook is reached: a path in the project, a shared link, or Drive. */
-export type SourceKind = 'local' | 'sheet' | 'drive';
+/** How a workbook is reached: a path in the project, a shared link, Drive, or browser upload. */
+export type SourceKind = 'local' | 'sheet' | 'drive' | 'upload';
 
 export interface DriveStatus {
   configured: boolean;
@@ -140,8 +140,8 @@ export interface PushResult {
 
 export interface RunSummary {
   run_id: string;
-  project_id: string;
-  project_name: string;
+  project_id: string | null;
+  project_name: string | null;
   started_at: string;
   finished_at: string | null;
   status: string;
@@ -153,19 +153,7 @@ export interface RunSummary {
   file_id: number | string | null;
   source_name: string | null;
   config_name: string | null;
-}
-
-export interface WorkbookDirItem {
-  name: string;
-  path: string;
-  kind: 'folder' | 'file';
-  size: number | null;
-}
-
-export interface WorkbookDirResult {
-  root: string | null;
-  folder: string;
-  items: WorkbookDirItem[];
+  origin: 'project' | 'batch';
 }
 
 export interface BatchFileResult {
@@ -199,6 +187,31 @@ export interface BatchPushResult {
   failed: number;
   total: number;
   target: { target: string; database: string; db_schema: string; prefix: string };
+}
+
+export interface FileTableMeta {
+  table_name: string;
+  sheet_name: string;
+  header_row: number | null;
+  data_start_row: number;
+  data_end_row: number | null;
+  column_count: number;
+  row_count: number;
+  loaded_at: string | null;
+  file_sha256: string | null;
+}
+
+export interface DataFile {
+  file_id: string;
+  source_name: string;
+  file_sha256: string | null;
+  source_ref: string | null;
+  config_ref: string | null;
+  db_schema: string;
+  pushed_at: string;
+  row_total: number;
+  rows_per_table: Record<string, number>;
+  tables: FileTableMeta[];
 }
 
 export interface RunDetail extends RunSummary {

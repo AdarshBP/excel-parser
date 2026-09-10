@@ -20,93 +20,250 @@ BOLD = Font(bold=True)
 
 # header -> (required?, meaning, allowed values, example)
 SHEET_HELP = [
-    ("table_name", "yes", "Logical table name for this block. The table created is "
-                          "<table_prefix><table_name>.",
+    ("table_name", "yes",
+     "The database table name for this block. The physical table becomes "
+     "<table_prefix><table_name>.\n\n"
+     "Example: if your source has an 'Orders' tab, you might name it 'orders'. "
+     "Two blocks on the same sheet need different names — e.g. 'card_payments' "
+     "and 'cash_payments' for two sections on a 'Payments' tab.",
      "lowercase letters, digits, underscore; unique in the workbook; max 63 chars",
-     "sales"),
-    ("sheet_name", "yes", "Worksheet tab in the SOURCE workbook that this block sits on.",
-     "must match the tab name character for character (Excel truncates long tab names)",
-     "Sales"),
-    ("layout", "yes", "Shape of the block. Documentation for the reader - both are read "
-                      "cell by cell.",
-     "table = header row + data rows | key_value = label column + value column",
+     "orders"),
+    ("sheet_name", "yes",
+     "The exact tab name in the SOURCE workbook. Must match character for "
+     "character — copy-paste it from the tab to avoid typos.\n\n"
+     "Example: if the tab is called 'Order Level', type exactly 'Order Level'. "
+     "Excel truncates long tab names (e.g. 'Growth Investments and Other De'), "
+     "so copy the truncated name.",
+     "exact tab name from the source file",
+     "Order Level"),
+    ("layout", "yes",
+     "Describes the shape of the data block:\n"
+     "  'table' = a header row (e.g. row 1) followed by data rows below it.\n"
+     "  'key_value' = labels in one column, values in the next (like a settings block).\n\n"
+     "Example: a list of orders with columns Date, Customer, Amount → 'table'. "
+     "A summary block with 'Total Orders: 42' on one row → 'key_value'.",
+     "table | key_value",
      "table"),
-    ("header_row", "no", "Row that holds the printed headers. Never read as data; kept for "
-                         "the audit table.",
-     "whole number, 1-based as shown in Excel; blank for key_value", "1"),
-    ("data_start_row", "yes", "First row of real data.",
-     "whole number, must be below the header/title row", "2"),
-    ("data_end_row", "no", "Last row of real data. Set it to fence off a totals row, notes, "
-                           "or a second block further down the sheet.",
-     "whole number >= data_start_row; blank = read to the last used row", "(blank)"),
-    ("active", "yes", "Switch the block off without deleting the rows.",
-     "Y = generate the table and load it | N = ignore completely", "Y"),
-    ("description", "no", "What this table represents. Written as a PostgreSQL COMMENT ON TABLE "
-                          "so AI agents and BI tools can discover the meaning.",
-     "any text", "Order-level payout details from the delivery platform"),
-    ("domain", "no", "Business domain or category. Written into the table comment as a [tag].",
-     "any text, e.g. finance, orders, inventory, hr", "food_delivery"),
-    ("notes", "no", "Free text; copied into the generated SQL as a comment.",
-     "any text", "invoice lines, one row per invoice"),
+    ("header_row", "no",
+     "The row number that contains column headers (e.g. 'Date', 'Customer', "
+     "'Amount'). Not read as data — only recorded in the audit log.\n\n"
+     "Example: if row 1 has headers and data starts at row 2, set header_row=1. "
+     "Leave blank for key_value layout.",
+     "whole number, 1-based as shown in Excel; blank for key_value",
+     "1"),
+    ("data_start_row", "yes",
+     "The FIRST row of actual data (not the header, not a title row). "
+     "Look at the row numbers in Excel.\n\n"
+     "Example: if row 1 is headers and data starts at row 2, set data_start_row=2. "
+     "If there is a title on rows 1–3, headers on row 4, and data from row 5, "
+     "set data_start_row=5.",
+     "whole number, must be below the header/title row",
+     "2"),
+    ("data_end_row", "no",
+     "The LAST row of data. Set this when there are totals, notes, or another "
+     "data block below.\n\n"
+     "Example: data in rows 2–50, then a 'Grand Total' on row 51 → set "
+     "data_end_row=50. If another block starts at row 55, fence this one off "
+     "at row 50.\n"
+     "Leave blank to read to the last non-empty row in the sheet.",
+     "whole number >= data_start_row; blank = read to the last used row",
+     "(blank)"),
+    ("active", "yes",
+     "Y = this block is processed (table created, data loaded).\n"
+     "N = completely skipped — use this to park a block you do not want "
+     "right now without deleting the row.",
+     "Y | N",
+     "Y"),
+    ("description", "no",
+     "A human-readable description of what this table contains. "
+     "Written as a COMMENT ON TABLE in PostgreSQL so BI tools and AI agents "
+     "can discover meaning.\n\n"
+     "Example: 'Order-level payout details from the Swiggy annexure'",
+     "any text",
+     "Order-level payout details from the delivery platform"),
+    ("domain", "no",
+     "A business category tag. Prepended to the table comment as [domain].\n\n"
+     "Example: 'finance', 'orders', 'inventory', 'hr'",
+     "any text",
+     "food_delivery"),
+    ("notes", "no",
+     "Free text for your own use. Copied into the generated SQL as a comment.",
+     "any text",
+     "invoice lines, one row per invoice"),
 ]
 
 COLUMN_HELP = [
-    ("table_name", "yes", "Which sheet_config block this column belongs to.",
-     "must match a table_name on sheet_config", "sales"),
-    ("source_ref", "yes", "Which Excel column of that block to read. Read by POSITION - "
-                          "re-check it whenever the supplier inserts a column.",
-     "col:<letter>, e.g. col:A, col:AM. No row numbers, no ranges, no formulas",
+    ("table_name", "yes",
+     "Which block (from sheet_config) this column belongs to.\n\n"
+     "Example: if you defined a block called 'orders' in sheet_config, "
+     "every column row for that block has table_name='orders'.",
+     "must match a table_name on sheet_config",
+     "orders"),
+    ("source_ref", "yes",
+     "Which Excel column letter to read FROM the source file. The parser "
+     "reads by column position, NOT by header text.\n\n"
+     "Example: if 'Order ID' is in column A → 'col:A'. If 'Amount' is in "
+     "column D → 'col:D'. Wide sheets: column 30 = 'col:AD'.\n\n"
+     "IMPORTANT: if the supplier inserts a new column, every letter after it "
+     "shifts. Re-check all source_ref values when that happens.",
+     "col:<letter> (e.g. col:A, col:B, col:AM). No row numbers, no ranges",
      "col:A"),
-    ("source_header", "no", "The header text as printed in the source file.",
-     "any text; documentation only, a renamed header does not break the load",
+    ("source_header", "no",
+     "The header text as printed in the source file — purely for documentation. "
+     "The parser never matches by header text; it always uses source_ref.\n\n"
+     "Example: if column A has header 'Invoice No', put 'Invoice No' here. "
+     "This shows up in the ER diagram and preview tooltips. If the supplier "
+     "renames the header, the load still works — only source_ref matters.",
+     "any text; documentation only",
      "Invoice No"),
-    ("column_name", "yes", "Database column name to create.",
-     "lowercase letters/digits/underscore, unique within the table, max 63 chars; "
-     "not file_id, sheet_name, source_row_num or <table_name>_id",
+    ("column_name", "yes",
+     "The database column name to create. Must be unique within the table.\n\n"
+     "Example: 'Invoice No' → 'invoice_no', 'Order Date' → 'order_date'.\n"
+     "Reserved names (added automatically): file_id, sheet_name, "
+     "source_row_num, <table_name>_id — do not use these.",
+     "lowercase letters/digits/underscore, unique within the table, max 63 chars",
      "invoice_no"),
-    ("data_type", "yes", "How the cell is converted. Pick it from the messiest value in the "
-                         "column, not the first one.",
-     "text | numeric | integer | date | timestamp | boolean", "text"),
-    ("nullable", "yes", "May the cell be empty?",
-     "Y = allowed | N = NOT NULL, and a row with it empty is rejected and reported",
+    ("data_type", "yes",
+     "How the cell value is converted. Choose the type based on the MESSIEST "
+     "value in the column, not just the first row.\n\n"
+     "  text     → keeps the text, trims whitespace. Use for names, IDs, mixed content.\n"
+     "  numeric  → extracts numbers: '₹1,234.50' → 1234.5, '18%' → 18.0\n"
+     "  integer  → like numeric but truncated: '42.0' → 42\n"
+     "  date     → converts to YYYY-MM-DD: '02-Aug-2026' → '2026-08-02'\n"
+     "  timestamp → date + time: '2026-08-02 19:45'\n"
+     "  boolean  → yes/true/1 → 1, no/false/0 → 0\n\n"
+     "If ANY cell can hold '-', 'NA', or a note, use 'text' to avoid NULLs.",
+     "text | numeric | integer | date | timestamp | boolean",
+     "text"),
+    ("nullable", "yes",
+     "Can this column be empty in the source?\n\n"
+     "  Y = empty cells are stored as NULL (most columns should use this).\n"
+     "  N = NOT NULL — any row where this cell is empty is rejected and "
+     "reported, not loaded.\n\n"
+     "Example: 'order_id' should be N (every order must have an ID). "
+     "'discount' should be Y (not all orders have a discount).\n"
+     "When in doubt, use Y — it is safer and you can tighten later.",
+     "Y | N",
+     "Y"),
+    ("is_key", "yes",
+     "Creates a non-unique INDEX on this column for faster lookups. "
+     "This is NOT a primary key and does NOT deduplicate rows.\n\n"
+     "Example: set Y on 'order_id' or 'invoice_no' — columns you will "
+     "filter or join on. Set N on 'amount', 'description', etc.",
+     "Y | N",
      "N"),
-    ("is_key", "yes", "Create a plain index on this column (for lookups). NOT a primary key "
-                      "and it does not deduplicate.",
-     "Y | N", "Y"),
-    ("transform", "no", "Intent of the cleaning. Documentation - the actual cleaning comes "
-                        "from data_type.",
-     "trim | money | percent | date | blank", "trim"),
-    ("column_order", "yes", "Position of the column in the created table.",
-     "whole number; gaps are fine, duplicates make the order arbitrary", "1"),
-    ("script", "no", "Predefined transformation(s) applied AFTER type casting. Chain "
-                     "multiple with | (e.g. trim|uppercase). Runs during preview, "
-                     "validation, and push. Errors block the push.",
-     "uppercase | lowercase | titlecase | trim | strip_spaces | digits_only | "
-     "letters_only | alphanum_only | abs | round_2 | round_0 | floor | ceil | "
-     "negate | date_only | year_month | not_null. Chain: trim|uppercase",
-     "trim|uppercase"),
-    ("description", "no", "What this column means. Written as a PostgreSQL COMMENT ON COLUMN "
-                          "so AI agents and BI tools can discover the meaning.",
-     "any text", "Unique order identifier from the platform"),
-    ("unit", "no", "Unit of measurement. Appended to the column comment in parentheses.",
-     "any text, e.g. INR, USD, percent, count, kg", "INR"),
+    ("column_order", "yes",
+     "Controls the position of this column in the created table. "
+     "Number them 1, 2, 3... in the order you want.\n\n"
+     "Example: invoice_no=1, invoice_date=2, customer=3, amount=4.\n"
+     "Gaps are fine (1, 5, 10); duplicates make the order arbitrary.",
+     "whole number",
+     "1"),
+    ("script", "no",
+     "Transformations applied AFTER type casting on every cell value. "
+     "Chain multiple with | (pipe).\n\n"
+     "TEXT examples:\n"
+     "  trim             '  hello  ' → 'hello'\n"
+     "  uppercase        'hello' → 'HELLO'\n"
+     "  lowercase        'HELLO' → 'hello'\n"
+     "  titlecase        'hello world' → 'Hello World'\n"
+     "  digits_only      'INV-001' → '001'\n"
+     "  letters_only     'Order-123' → 'Order'\n"
+     "  alphanum_only    'Order #123!' → 'Order123'\n"
+     "  collapse_spaces  'hello    world' → 'hello world'\n"
+     "  replace_newlines 'line1\\nline2' → 'line1 line2'\n"
+     "  remove_punctuation 'Hello, World!' → 'Hello World'\n"
+     "  first_word       'John Smith' → 'John'\n"
+     "  last_word        'John Smith' → 'Smith'\n"
+     "  left_10 / right_10  first/last 10 characters\n"
+     "  slug             'Hello World!' → 'hello-world'\n\n"
+     "NUMERIC examples:\n"
+     "  abs              -120.5 → 120.5\n"
+     "  negate           100 → -100\n"
+     "  round_2          3.14159 → 3.14\n"
+     "  round_1          3.456 → 3.5\n"
+     "  round_0          3.7 → 4.0\n"
+     "  floor / ceil     3.9 → 3 / 3.1 → 4\n"
+     "  pct_to_fraction  18.0 → 0.18\n"
+     "  fraction_to_pct  0.18 → 18.0\n"
+     "  clamp_0          -5 → 0 (negatives become 0)\n\n"
+     "DATE examples:\n"
+     "  date_only        '2026-08-02T19:45' → '2026-08-02'\n"
+     "  year_month       '2026-08-02' → '2026-08'\n"
+     "  year_only        '2026-08-02' → '2026'\n\n"
+     "GUARD:\n"
+     "  not_null         error if NULL\n"
+     "  not_empty        error if NULL or empty string",
+     "chain with |, e.g. trim|uppercase",
+     "trim"),
+    ("description", "no",
+     "What this column represents. Written as a COMMENT ON COLUMN in PostgreSQL "
+     "so BI tools and AI agents can understand the schema.\n\n"
+     "Example: 'Unique order identifier assigned by the platform'",
+     "any text",
+     "Unique order identifier from the platform"),
+    ("unit", "no",
+     "Unit of measurement for numeric columns. Appended to the column comment.\n\n"
+     "Example: 'INR' for Indian Rupees, 'USD', 'percent', 'count', 'kg'",
+     "any text",
+     "INR"),
+    ("null_default", "no",
+     "What to store when a cell is empty, instead of NULL.\n\n"
+     "Examples:\n"
+     "  numeric/integer column: '0' → stores 0 instead of NULL\n"
+     "  text column: 'N/A' or '' → stores that string instead of NULL\n"
+     "  boolean column: '0' or 'false' → stores 0 instead of NULL\n\n"
+     "Applied after type casting, so a cell with '-' that casts to NULL "
+     "also gets the default. Leave blank to keep NULL (the default behavior).",
+     "any value appropriate for the data_type; blank = store NULL",
+     "0"),
+    ("references", "no",
+     "Declares a foreign-key relationship to another table's column. "
+     "Shown as a dashed line in the ER diagram. Does NOT create a database "
+     "constraint — it is for documentation and the diagram only.\n\n"
+     "Example: if this column references the 'order_id' column in the "
+     "'orders' table, write 'orders.order_id'. The ER diagram will draw "
+     "an arrow from this column to orders.order_id.",
+     "table_name.column_name (must reference an existing table and column)",
+     "orders.order_id"),
 ]
 
 TARGET_HELP = [
-    ("target", "no", "Database engine to push into.", "sqlite | postgres (default sqlite)",
-     "sqlite"),
-    ("database", "no", "SQLite: the file path. PostgreSQL: the database NAME.",
-     "any path for sqlite; a plain name for postgres. Blank = take it from the command "
-     "line / PGDATABASE", "loaded.db"),
-    ("db_schema", "no", "PostgreSQL schema to load into; created if it does not exist.",
-     "plain name; blank = public. Ignored by SQLite, which has no schemas", "staging"),
-    ("table_prefix", "no", "Put in front of every generated table name, e.g. stg_ turns "
-                           "sales into stg_sales.",
-     "plain name fragment, letters/digits/underscore; blank = no prefix (default)",
+    ("target", "no",
+     "Which database to push into.\n\n"
+     "  'sqlite'  → a local file (good for testing and small datasets)\n"
+     "  'postgres' → a PostgreSQL server (production use)\n\n"
+     "Example: use 'sqlite' while developing, then switch to 'postgres' for production.",
+     "sqlite | postgres (default sqlite)",
+     "postgres"),
+    ("database", "no",
+     "SQLite: the file path (e.g. 'loaded.db' creates a file in the working directory).\n"
+     "PostgreSQL: the database NAME (e.g. 'excel_parser').\n\n"
+     "Leave blank to take it from the command line (--database) or "
+     "the PGDATABASE environment variable.",
+     "any path for sqlite; a plain name for postgres",
+     "excel_parser"),
+    ("db_schema", "no",
+     "PostgreSQL schema to load into. Created automatically if it does not exist.\n\n"
+     "Example: 'staging' puts all tables under the 'staging' schema. "
+     "Blank = the 'public' schema. Ignored by SQLite (no schemas).",
+     "plain name; blank = public. Ignored by SQLite",
+     "staging"),
+    ("table_prefix", "no",
+     "A prefix added to every table name.\n\n"
+     "Example: if table_prefix='stg_' and table_name='orders', "
+     "the physical table is 'stg_orders'. Useful for separating staging "
+     "from production tables in the same schema.\n"
+     "Blank = no prefix (default).",
+     "plain name fragment; blank = no prefix",
      "(blank)"),
-    ("id_type", "no", "How every primary key and the file_id are generated: a database "
-                      "counter (1, 2, 3...) or a UUID generated for each row.",
-     "integer | uuid (default integer)", "integer"),
+    ("id_type", "no",
+     "How primary keys and file_id are generated.\n\n"
+     "  'integer' → auto-incrementing numbers (1, 2, 3...) — simpler, default.\n"
+     "  'uuid'    → random UUIDs per row — use when merging data from "
+     "multiple sources where integer IDs would collide.",
+     "integer | uuid (default integer)",
+     "integer"),
 ]
 
 TYPES = [
@@ -258,10 +415,10 @@ def build(path: Path) -> None:
         ["sales", "Sales", "table", 1, 2, None, "Y", "example row - delete me"],
     ])
     config_sheet(wb, "column_config", COLUMN_HELP, [
-        ["sales", "col:A", "Invoice No", "invoice_no", "text", "N", "Y", "trim", 1],
-        ["sales", "col:B", "Invoice Date", "invoice_date", "date", "Y", "N", "date", 2],
-        ["sales", "col:C", "Customer", "customer", "text", "Y", "N", "trim", 3],
-        ["sales", "col:D", "Amount", "amount", "numeric", "Y", "N", "money", 4],
+        ["sales", "col:A", "Invoice No", "invoice_no", "text", "N", "Y", 1],
+        ["sales", "col:B", "Invoice Date", "invoice_date", "date", "Y", "N", 2],
+        ["sales", "col:C", "Customer", "customer", "text", "Y", "N", 3],
+        ["sales", "col:D", "Amount", "amount", "numeric", "Y", "N", 4],
     ])
 
     add_help_sheets(wb)
