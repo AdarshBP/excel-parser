@@ -1,7 +1,9 @@
-# Environment / secrets
+# Environment / secrets (real credentials — never commit)
 .env
 .env.local
+.env.docker
 .env.*.local
+# .env.example and .env.prod ARE tracked (they have placeholders, not real secrets)
 
 # Local assistant/dev tool config
 .devin/

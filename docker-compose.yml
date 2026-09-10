@@ -6,7 +6,6 @@
 #
 # Prerequisites:
 #   1. Create a .env file with your PostgreSQL credentials and app settings
-#   2. Create a workbooks/ folder (or set WORKBOOK_DIR) with your source files
 #
 # On first run, create the default user:
 #   docker compose exec backend python3 users.py add admin
@@ -24,10 +23,11 @@ services:
       APP_SCHEMA: ${APP_SCHEMA:-excelparser_config}
       APP_ALLOWED_ORIGINS: ${APP_ALLOWED_ORIGINS:-http://localhost:4200}
       PYTHONUNBUFFERED: 1
-      WORKBOOK_DIR: /excel_parser/workbooks
     volumes:
-      - ${WORKBOOK_DIR:-./workbooks}:/excel_parser/workbooks:ro
       - backend-cache:/excel_parser/app/cache
+      # Uncomment to also serve local files from the host:
+      # - ./workbooks:/excel_parser/workbooks:ro
+      # And add this to .env: WORKBOOK_DIR=/excel_parser/workbooks
     expose:
       - "8000"
     healthcheck:

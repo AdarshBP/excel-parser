@@ -1,0 +1,22 @@
+# Local build + dev override — use with:
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
+#
+# Overrides Hub images with local builds and fixes PGHOST for Docker on Mac/Win
+# (localhost in .env means the host machine, not the container).
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: app/backend/Dockerfile
+    image: excel-parser-backend:local
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      PGHOST: host.docker.internal
+
+  frontend:
+    build:
+      context: app/frontend
+      dockerfile: Dockerfile
+    image: excel-parser-frontend:local
