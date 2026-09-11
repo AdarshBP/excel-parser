@@ -29,7 +29,7 @@ tools/values.py      cell -> database value casting, shared by both stages
 tools/rows.py        row reading, shared by executor and preview
 tools/preview.py     the model + cast-row previews the app renders
 tools/db.py          the two database targets and the .env reader
-tools/make_template.py, tools/make_examples.py   regenerate template/ and examples 03-05, 07-08
+tools/make_template.py, tools/make_examples.py   regenerate template/ and examples 03-05, 07-08, 16-17
 
 app/backend/         FastAPI: main.py (endpoints), auth.py, state.py (PostgreSQL),
                      service.py, batch.py, sources.py (upload / link / Drive),
@@ -40,10 +40,11 @@ app/run.sh           starts backend :8000 and frontend :4200
 
 util/seed.sh         create the default user (admin/password)
 util/clear_all.sh    wipe app state (PG schema) + cache, then re-seed
+util/test-examples.sh  validate + push all examples, compare row counts
 util/docker-publish.sh  build + push Docker images to Hub
 util/env-switch.sh   switch .env between local/docker/prod
 
-examples/01..11      each folder holds only the two workbooks
+examples/01..17      each folder holds only the two workbooks
 template/            config_template.xlsx — every header explained
 docs/                EXAMPLES.md, CONFIG_RULES.md, RUNNING.md, APP_RUNNING.md, APP_PLAN.md, API.md
 Dockerfile           monolithic image (backend + frontend), PG external
@@ -104,15 +105,15 @@ Checks to run before calling a change done:
 
 ```bash
 python3 -m pyflakes tools app/backend
-(cd app/backend && python3 -m pytest -q)           # test_drive.py
 (cd app/frontend && npm run build)                 # Node 22+ required
+./util/test-examples.sh                            # validate + push all examples to PG
+./util/test-examples.sh --validate                 # validate only, no push
 ```
 
-Expected row counts, useful as a regression check: example 01 = 3 rows,
-02 = 12, 03 = 4 UUID rows, 05 = 4, 06 = 9 (3 orders + 6 items),
-09 (Swiggy) = 217 with `order_level` 122, 11 (GrowthFalcons) = 109,
-16 (source_ref showcase) = 4.
-17 (kitchen sink) = 18 (5 orders + 8 items + 5 summary).
+Expected row counts (verified by `test-examples.sh`): 01 = 3, 02 = 12,
+03 = 4 (UUID), 04 = 4, 05 = 4, 06 = 9 (3+6), 12 = 31, 13 = 33,
+14 = 470 (CSV), 15 = 1141, 16 = 3, 17 = 18 (5+8+5).
+09 (Swiggy) = 217, 11 (GrowthFalcons) = 109 — client files, skipped if absent.
 Examples 07 and 08 must fail validation and exit 1 with nothing written.
 
 ## Application features

@@ -241,6 +241,20 @@ nothing was inserted
 
 ---
 
+## Regression test
+
+Run every example through validator and executor, comparing row counts:
+
+```bash
+./util/test-examples.sh              # validate + push all examples to PostgreSQL
+./util/test-examples.sh --validate   # validate only, no push
+```
+
+14 examples tested (09-11 skipped if client files absent). Examples 07 and 08
+must fail validation. All others must match their expected row count exactly.
+
+---
+
 ## Using the two stages from your own code
 
 Both stages are plain functions, which is the seam an application would use:
