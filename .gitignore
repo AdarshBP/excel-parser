@@ -25,6 +25,10 @@ node_modules/
 dist/
 .angular/
 
+# Generated DDL and test databases
+schema.*.sql
+*.db
+
 # Test / coverage
 .pytest_cache/
 .mypy_cache/
