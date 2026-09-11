@@ -1,47 +1,58 @@
 ---
 name: check-parser
-description: Run every Excel Parser check — pyflakes, backend tests, Angular build, and all eight examples through validator and executor — and compare against the expected row counts. Use after changing anything in tools/ or app/.
+description: Run every Excel Parser check — pyflakes, Angular build, all 17 examples through validator and executor with expected row counts, and push to PostgreSQL. Use after changing anything in tools/ or app/.
 ---
 
 # Check the Excel Parser
 
-Run from the project root. Do all four; a change is not done until they pass.
+Run from the project root. A change is not done until all checks pass.
+
+## 1. Code quality
 
 ```bash
 python3 -m pyflakes tools app/backend
-(cd app/backend && python3 -m pytest -q)
-(cd app/frontend && npm run build)        # Node 22 on PATH
+(cd app/frontend && npm run build)        # Node 22+ on PATH
 ```
 
-Then the examples. Work in a scratch directory (the example folders hold only
-the two workbooks — everything else is produced), and note that `executor.py`
-reads the DDL file the validator wrote from the *working directory*:
+## 2. Test all examples
+
+The test script validates and pushes every example to PostgreSQL, comparing
+row counts against expected values. Examples 07 and 08 must fail validation.
 
 ```bash
-work=$(mktemp -d)
-cd "$work"
-cp /path/to/excel_parser/examples/01_simple/*.xlsx .
-python3 /path/to/excel_parser/tools/validator.py sales_config.xlsx sales_source.xlsx \
-        --ddl schema.postgres.sql
-python3 /path/to/excel_parser/tools/executor.py sales_config.xlsx sales_source.xlsx
+./util/test-examples.sh              # validate + push all examples
+./util/test-examples.sh --validate   # validate only, no push
 ```
 
-Repeat for each example and check the count:
+Requires PG credentials in `.env` (or environment variables).
+
+## 3. Expected row counts
 
 | example | expect |
 | --- | --- |
 | 01_simple | 3 rows |
 | 02_features | 12 rows |
-| 03_uuid_keys | 4 rows, unique valid UUIDs, `file_id` joins intact |
-| 04_postgres_schema | 4 rows into PostgreSQL, schema `staging`, prefix `stg_` (needs `.env`) |
-| 05_data_types | 4 rows |
-| 06_references | 9 rows (3 orders + 6 items) |
-| 07_validation_errors | must fail validation, exit 1, nothing written |
-| 08_source_mismatch | must fail validation, exit 1, nothing written |
-| 09_swiggy_annexure | 217 rows, `order_level` 122, four blocks legitimately 0 rows, `Order Level!AV78` reported and stored NULL |
-| 11_growthfalcons | 109 rows, 5 tables |
+| 03_uuid_keys | 4 rows (UUID keys) |
+| 04_postgres_schema | 4 rows, schema `staging`, prefix `stg_` |
+| 05_data_types | 4 rows (all 6 data types) |
+| 06_references | 9 rows (3 orders + 6 items, FK) |
+| 07_validation_errors | must fail validation |
+| 08_source_mismatch | must fail validation |
+| 09_swiggy_annexure | 217 rows (client file, skipped if absent) |
+| 10_zomato_settlement | (client file, skipped if absent) |
+| 11_growthfalcons | 109 rows (client file, skipped if absent) |
+| 12_petpooja_growth | 31 rows |
+| 13_smartq_payment | 33 rows |
+| 14_zomato_business | 470 rows (CSV source) |
+| 15_magicpin_ledger | 1141 rows |
+| 16_source_ref_showcase | 3 rows (col/const/fn/expr, row_filter, date_format) |
+| 17_kitchen_sink | 18 rows (5 orders + 8 items + 5 summary — every feature) |
 
-Re-loading a byte-identical file is refused by design — that is a pass, not a
-bug. If the configuration format changed, also regenerate
-`template/config_template.xlsx` with `tools/make_template.py` and re-annotate
-every example configuration (`--annotate`) before running the above.
+Re-loading a byte-identical file is refused by dedup — that is a pass, not a
+bug. If the configuration format changed, regenerate the template and
+re-annotate all examples first:
+
+```bash
+python3 tools/make_template.py template/config_template.xlsx
+python3 tools/make_examples.py
+```

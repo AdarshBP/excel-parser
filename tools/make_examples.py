@@ -70,7 +70,7 @@ def uuid_keys() -> None:
     ]})
     config_workbook(
         folder / "orders_config.xlsx",
-        {"target": "sqlite", "database": "orders.db", "db_schema": None,
+        {"target": "postgres", "database": "excel_parser", "db_schema": "uuid_keys",
          "table_prefix": None, "id_type": "uuid"},
         [["orders", "Orders", "table", 1, 2, None, None, "Y",
           "id_type = uuid, so orders_id and file_id are UUIDs"]],
@@ -119,7 +119,7 @@ def data_types() -> None:
     ]})
     config_workbook(
         folder / "types_config.xlsx",
-        {"target": "sqlite", "database": "types.db", "db_schema": None,
+        {"target": "postgres", "database": "excel_parser", "db_schema": "data_types",
          "table_prefix": None, "id_type": "integer"},
         [["card_settlement", "Types", "table", 1, 2, None, None, "Y",
           "one column per data type; row 6 is skipped - card is nullable = N and empty"]],
@@ -144,7 +144,7 @@ def validation_errors() -> None:
     config_workbook(
         folder / "broken_config.xlsx",
         # every line here is a mistake the validator names and refuses to load
-        {"target": "sqlite", "database": "broken.db", "db_schema": None,
+        {"target": "postgres", "database": "excel_parser", "db_schema": "broken",
          "table_prefix": None, "id_type": "guid"},
         [["good_rows", "Data", "table", 1, 2, None, None, "Y", "the only correct block"],
          ["Bad Name", "Data", "table", 1, 2, None, None, "Y", "table_name with a space"],
@@ -172,7 +172,7 @@ def source_mismatch() -> None:
     ]})
     config_workbook(
         folder / "stock_config.xlsx",
-        {"target": "sqlite", "database": "stock.db", "db_schema": None,
+        {"target": "postgres", "database": "excel_parser", "db_schema": "stock",
          "table_prefix": None, "id_type": "integer"},
         [["stock", "Stock", "table", 1, 2, None, None, "Y",
           "col:F is past the used range; row 3 has no warehouse; row 4 has bad cells"],
@@ -204,7 +204,7 @@ def source_ref_showcase() -> None:
     ]})
     config_workbook(
         folder / "products_config.xlsx",
-        {"target": "sqlite", "database": "products.db", "db_schema": None,
+        {"target": "postgres", "database": "excel_parser", "db_schema": "showcase",
          "table_prefix": None, "id_type": "integer"},
         # where: only load rows where qty >= 10 (filters out Gadget B)
         [["products", "Products", "table", 1, 2, 5,
@@ -387,7 +387,7 @@ def kitchen_sink() -> None:
         ["orders",    'expr:{A} & " — " & {B}', None, "order_label", "text", "Y", "N", 22, None, None, None, None, "string concat with &", None],
         ["orders",    'expr:{A} & " " & fn:today', None, "id_with_date", "text", "Y", "N", 23, None, None, None, None, "mix col + fn in expr", None],
         # date scripts
-        ["orders",    "col:C",       None,         "order_month",  "date",    "Y", "N", 24, "%m/%d/%Y",  None,        None,     "year_month",      "date cast + year_month script", None],
+        ["orders",    "expr:{order_date}",None,      "order_month",  "text",    "Y", "N", 24, None,        None,        None,     "year_month",      "expr refs computed date + year_month", None],
 
         # ── items table ── (FK to orders)
         ["items",     "col:A",       "Order ID",   "order_id",    "text",     "N", "Y", 1,  None,        "orders.order_id", None, "trim|uppercase", "FK to orders table",      None],
