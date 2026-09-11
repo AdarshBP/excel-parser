@@ -167,8 +167,21 @@ def execute(config: Path, source: Path, target: str = None, database=None, prefi
             insert = (f"INSERT INTO {table} (" + ", ".join(all_col_names)
                       + ") VALUES (" + ", ".join([ph] * len(all_col_names)) + ")")
             loaded = 0
+            row_ctx = {"file_name": source.name,
+                        "_seq_key": str(sheet["table_name"]).strip()}
+            # Parse where filter
+            import validator as validmod
+            where_clause = str(sheet.get("row_filter") or "").strip()
+            where_conditions = validmod.parse_where(where_clause) if where_clause else []
             for row_num in range(start, end + 1):
-                read = rowmod.build_row(ws, cols, row_num)
+                # Apply where filter
+                if where_conditions:
+                    from openpyxl.utils import column_index_from_string as _cis
+                    def _where_reader(ltr, _ws=ws, _row=row_num):
+                        return _ws.cell(_row, _cis(ltr)).value
+                    if not validmod.evaluate_where(where_conditions, _where_reader):
+                        continue
+                read = rowmod.build_row(ws, cols, row_num, row_ctx)
                 for ref, column, message in read.bad:
                     bad_cells.append(f"{table}: {name}!{ref} -> {column} stored as NULL, "
                                      f"{message}")

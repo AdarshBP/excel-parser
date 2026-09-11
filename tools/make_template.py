@@ -68,6 +68,25 @@ SHEET_HELP = [
      "Leave blank to read to the last non-empty row in the sheet.",
      "whole number >= data_start_row; blank = read to the last used row",
      "(blank)"),
+    ("row_filter", "no",
+     "Skip rows that don't match this condition.\n\n"
+     "Use col:LETTER to reference a cell (same as source_ref), "
+     "then an operator and a value.\n\n"
+     "Operators:\n"
+     "  =  !=  >  <  >=  <=        compare text or numbers\n"
+     "  contains  not_contains     text search inside the cell\n"
+     "  is_empty  is_not_empty     check for blank cells (no value needed)\n\n"
+     "Examples:\n"
+     '  col:A is_not_empty              skip blank rows\n'
+     '  col:D > 0                       only positive amounts\n'
+     '  col:B = "Delivered"             only delivered orders\n'
+     '  col:C != "Cancelled"            exclude cancelled\n'
+     '  col:E contains "swiggy"         cell contains the word\n'
+     '  col:D > 100 AND col:F != "NA"   combine two conditions\n'
+     '  col:A = "Active" OR col:A = "Pending"   either status\n\n'
+     "Leave blank to load all rows (default).",
+     'col:LETTER op value [AND/OR ...]; blank = all rows',
+     ""),
     ("active", "yes",
      "Y = this block is processed (table created, data loaded).\n"
      "N = completely skipped — use this to park a block you do not want "
@@ -100,13 +119,36 @@ COLUMN_HELP = [
      "must match a table_name on sheet_config",
      "orders"),
     ("source_ref", "yes",
-     "Which Excel column letter to read FROM the source file. The parser "
-     "reads by column position, NOT by header text.\n\n"
-     "Example: if 'Order ID' is in column A → 'col:A'. If 'Amount' is in "
-     "column D → 'col:D'. Wide sheets: column 30 = 'col:AD'.\n\n"
+     "Where to get the value for this column. Four formats:\n\n"
+     "1. Column reference: 'col:<letter>' — reads from the source file by "
+     "position, NOT by header text. Example: col:A, col:D, col:AM.\n\n"
+     "2. Constant value: 'const:<value>' — fills every row with a fixed "
+     "value. Example: const:adarsh, const:100.\n\n"
+     "3. Computed value: 'fn:<name>' — fills every row with a value "
+     "computed at load time. Available functions:\n"
+     "  fn:now       — current timestamp (timestamp, text)\n"
+     "  fn:today     — current date (date, text)\n"
+     "  fn:uuid      — random UUID per row (text)\n"
+     "  fn:file_name — source file name (text)\n"
+     "  fn:sequence  — counter 1,2,3... per table (integer, numeric, text)\n\n"
+     "4. Expression: 'expr:<expression>' — computes a value from other "
+     "columns, constants, functions and literals. Use {X} to reference "
+     "Excel column X.\n"
+     "  Operators: + - * / (numeric), & (string concatenation)\n"
+     "  Grouping: parentheses ( ) to override precedence\n"
+     "  Unary minus: -{A} to negate a value\n"
+     "  NULL handling: arithmetic with NULL -> NULL (like SQL)\n"
+     "  Examples:\n"
+     "    expr:{D} + {E}             (sum two columns)\n"
+     "    expr:({A} + {B}) * {C}     (grouped arithmetic)\n"
+     "    expr:-{D}                  (negate a value)\n"
+     "    expr:{A} & \" - \" & {C}    (concatenate with separator)\n"
+     "    expr:{D} * 0.18            (calculate 18% tax)\n\n"
+     "All results are cast to the column's data_type. 'script' and\n"
+     "'null_default' apply after the expression result is cast.\n\n"
      "IMPORTANT: if the supplier inserts a new column, every letter after it "
-     "shifts. Re-check all source_ref values when that happens.",
-     "col:<letter> (e.g. col:A, col:B, col:AM). No row numbers, no ranges",
+     "shifts. Re-check all col: and expr: source_ref values when that happens.",
+     "col:<letter>, const:<value>, fn:<name>, or expr:<expression>",
      "col:A"),
     ("source_header", "no",
      "The header text as printed in the source file — purely for documentation. "
@@ -226,6 +268,19 @@ COLUMN_HELP = [
      "an arrow from this column to orders.order_id.",
      "table_name.column_name (must reference an existing table and column)",
      "orders.order_id"),
+    ("date_format", "no",
+     "Pin the date parsing to a specific format instead of auto-detecting.\n\n"
+     "Without this, the parser tries multiple formats in order — which means "
+     "'01/02/2026' could be January 2 or February 1 depending on which "
+     "format matches first.\n\n"
+     "Set this to eliminate ambiguity:\n"
+     "  %d/%m/%Y   → DD/MM/YYYY (European/Indian: 01/02/2026 = Feb 1)\n"
+     "  %m/%d/%Y   → MM/DD/YYYY (American: 01/02/2026 = Jan 2)\n"
+     "  %Y-%m-%d   → YYYY-MM-DD (ISO)\n"
+     "  %d-%b-%Y   → DD-Mon-YYYY (02-Aug-2026)\n\n"
+     "Only applies to date and timestamp columns. Ignored for other types.",
+     "Python strptime format string; blank = auto-detect",
+     ""),
 ]
 
 TARGET_HELP = [
@@ -412,7 +467,7 @@ def build(path: Path) -> None:
         row[2].alignment = Alignment(vertical="top", wrap_text=True)
 
     config_sheet(wb, "sheet_config", SHEET_HELP, [
-        ["sales", "Sales", "table", 1, 2, None, "Y", "example row - delete me"],
+        ["sales", "Sales", "table", 1, 2, None, None, "Y", None, None, "example row - delete me"],
     ])
     config_sheet(wb, "column_config", COLUMN_HELP, [
         ["sales", "col:A", "Invoice No", "invoice_no", "text", "N", "Y", 1],

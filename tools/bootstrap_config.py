@@ -213,7 +213,7 @@ def main(source: Path, target: Path) -> None:
         ["", "one row here = one table; a sheet with two header blocks gets two tables"],
         [],
         ["column_config", "one row per column of a target table"],
-        ["  source_ref", "col:<letter> = read that excel column"],
+        ["  source_ref", "col:<letter>, const:<value>, fn:<name>, or expr:<expression>"],
         ["  data_type", "text | numeric | integer | date | timestamp | boolean"],
         ["  column_order", "position in the table (1, 2, 3...)"],
         ["  is_key", "Y marks a natural key column (used for the unique index)"],

@@ -110,7 +110,9 @@ python3 -m pyflakes tools app/backend
 
 Expected row counts, useful as a regression check: example 01 = 3 rows,
 02 = 12, 03 = 4 UUID rows, 05 = 4, 06 = 9 (3 orders + 6 items),
-09 (Swiggy) = 217 with `order_level` 122, 11 (GrowthFalcons) = 109.
+09 (Swiggy) = 217 with `order_level` 122, 11 (GrowthFalcons) = 109,
+16 (source_ref showcase) = 4.
+17 (kitchen sink) = 18 (5 orders + 8 items + 5 summary).
 Examples 07 and 08 must fail validation and exit 1 with nothing written.
 
 ## Application features
@@ -146,6 +148,24 @@ Examples 07 and 08 must fail validation and exit 1 with nothing written.
   a cell is empty (e.g. `0` for numeric, `N/A` for text).
 * **`references`**: optional column in `column_config` — declares an FK
   relationship shown as a dashed line in the ER diagram.
+* **`source_ref` formats**: `col:<letter>` reads from an Excel column,
+  `const:<value>` fills every row with a fixed value, `fn:<name>` fills every
+  row with a computed value (`now`, `today`, `uuid`, `file_name`, `sequence`),
+  `expr:<expression>` computes a value from other columns (e.g.
+  `expr:({A} + {B}) * {C}`, `expr:{A} & " - " & {C}`; operators: `+`, `-`,
+  `*`, `/`, `&`, parentheses `()`, unary minus `-{X}`). NULL in arithmetic
+  → NULL (like SQL). `script` and `null_default` apply after the result is
+  cast. Expressions can reference other computed column names with
+  `{column_name}` syntax (two-pass: col/const/fn first, expr second).
+  Expression tokens are cached per load for performance.
+* **`row_filter`**: optional column in `sheet_config` — skip rows that
+  don't match. Syntax: `col:D > 0`, `col:B = "Delivered"`,
+  `col:A is_not_empty`. Operators: `=`, `!=`, `>`, `<`, `>=`, `<=`,
+  `contains`, `not_contains`, `is_empty`, `is_not_empty`. Combine with
+  `AND` / `OR`.
+* **`date_format`**: optional column in `column_config` — pins the date
+  parsing to a specific strptime format (e.g. `%m/%d/%Y` for US dates,
+  `%d/%m/%Y` for EU/Indian). Eliminates DD/MM vs MM/DD ambiguity.
 * **`script`**: optional column in `column_config` — post-cast transformations
   (e.g. `trim|uppercase`, `round_2`, `pct_to_fraction`). 28 scripts available
   across text, numeric, date, and guard categories. See `CONFIG_RULES.md`.

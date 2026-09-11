@@ -3,7 +3,7 @@
 Each example folder holds exactly two files: the **source excel** and the
 **configuration excel**. Everything else (schema, database, logs) is produced by
 the commands below - see `RUNNING.md` for the general procedure. Regenerate the
-generated examples (03-05, 07-08) with `python3 tools/make_examples.py`.
+generated examples (03-05, 07-08, 16-17) with `python3 tools/make_examples.py`.
 
 | # | folder | read it for |
 |---|---|---|
@@ -18,6 +18,8 @@ generated examples (03-05, 07-08) with `python3 tools/make_examples.py`.
 | 9 | `09_swiggy_annexure` | a real Swiggy invoice annexure - 13 tables, 217 rows, reconciled against the file itself |
 | 10 | `10_zomato_settlement` | a real Zomato settlement report |
 | 11 | `11_growthfalcons` | a real GrowthFalcons settlement report - 5 tables, 109 rows |
+| 16 | `16_source_ref_showcase` | all four `source_ref` types in one table: `col:`, `const:`, `fn:`, `expr:` |
+| 17 | `17_kitchen_sink` | **every parser feature** in one file — the comprehensive regression test |
 
 ## Scenario coverage
 
@@ -564,7 +566,7 @@ you can read the validator's own words for each mistake.
 | `column_config[good_rows].file_id` | `file_id` is a reserved lineage column |
 | `column_config[bad_rows].amount; drop` | a semicolon and a space in `column_name` |
 | `data_type = money` | not a supported type (use `numeric`) |
-| `source_ref = column:X` | the reference must be `col:X` |
+| `source_ref = column:X` | must be `col:X`, `const:<value>`, `fn:<name>`, or `expr:<expression>` |
 | `bad_rows.header_row = 5` with `data_start_row = 2` | the header sits inside the data |
 | `good_rows`: `col:B` mapped twice | the same cell is stored in two columns |
 
@@ -903,3 +905,188 @@ python3 ../../tools/executor.py annexure_config.xlsx <next-file>.xlsx
 Same database, new `file_id`; both loads stay separately queryable. Only a
 layout change by Swiggy means touching the configuration - row ranges and `col:`
 letters - never the code.
+
+---
+
+# Example 16 — source_ref showcase
+
+*Folder: `examples/16_source_ref_showcase/`*
+
+All four `source_ref` types in a single table: `col:`, `const:`, `fn:`, and
+`expr:`. Also demonstrates parentheses, unary minus, NULL propagation, and
+all five `fn:` functions.
+
+## Source: `products_source.xlsx`
+
+| Product | Category | Price | Qty | Tax % | Discount |
+|---|---|---|---|---|---|
+| Widget A | Electronics | 499.99 | 10 | 18 | 50 |
+| Gadget B | Electronics | 1299.50 | 5 | 18 | *(empty)* |
+| Book C | Stationery | 89.00 | 25 | 5 | 10 |
+| Pen D | Stationery | 15.50 | 100 | 5 | *(empty)* |
+
+Rows 2 and 4 have empty Discount — this tests NULL propagation in expressions.
+
+## Configuration
+
+`column_config` — 20 columns covering all features:
+
+| column_name | source_ref | what it demonstrates |
+|---|---|---|
+| product | `col:A` | **col:** read from Excel |
+| category | `col:B` | **col:** read from Excel |
+| price | `col:C` | **col:** read from Excel |
+| qty | `col:D` | **col:** read from Excel |
+| tax_pct | `col:E` | **col:** read from Excel |
+| discount | `col:F` | **col:** some rows are NULL |
+| currency | `const:INR` | **const:** fixed value |
+| warehouse | `const:warehouse-1` | **const:** fixed value |
+| loaded_at | `fn:now` | **fn:** current timestamp |
+| load_date | `fn:today` | **fn:** current date |
+| row_id | `fn:uuid` | **fn:** unique UUID per row |
+| source_file | `fn:file_name` | **fn:** source file name |
+| row_num | `fn:sequence` | **fn:** auto-counter 1,2,3,4 |
+| subtotal | `expr:{C} * {D}` | **expr:** basic arithmetic |
+| tax_amount | `expr:{C} * {D} * {E} / 100` | **expr:** chained arithmetic |
+| total | `expr:({C} * {D}) + ({C} * {D} * {E} / 100)` | **expr:** parentheses |
+| net_discount | `expr:{C} * {D} - {F}` | **expr:** NULL propagation (NULL when discount empty) |
+| neg_discount | `expr:-{F}` | **expr:** unary minus (NULL when discount empty) |
+| label | `expr:{A} & " (" & {B} & ")"` | **expr:** string concatenation |
+| price_label | `expr:{A} & " - " & const:INR & " " & {C}` | **expr:** mix col + const in concat |
+
+## Run
+
+```bash
+cd examples/16_source_ref_showcase
+python3 ../../tools/validator.py products_config.xlsx products_source.xlsx --ddl schema.sqlite.sql --target sqlite
+python3 ../../tools/executor.py  products_config.xlsx products_source.xlsx --target sqlite --database products.db --trace 2
+```
+
+Expected: 4 rows, 0 errors, 0 warnings.
+
+## Key behaviors
+
+| Feature | Column | Rows 1,3 (Discount filled) | Rows 2,4 (Discount NULL) |
+|---|---|---|---|
+| NULL propagation | net_discount | `subtotal - 50` = 4949.9 | NULL (arithmetic with NULL → NULL) |
+| Unary minus | neg_discount | `-50` | NULL |
+| Parentheses | total | `(price*qty) + (price*qty*tax/100)` | same (no NULL in this expr) |
+| fn:sequence | row_num | 1, 3 | 2, 4 |
+| fn:uuid | row_id | a different UUID for every row | a different UUID for every row |
+| fn:file_name | source_file | `products_source.xlsx` | `products_source.xlsx` |
+
+---
+
+# Example 17 — kitchen sink (comprehensive regression test)
+
+*Folder: `examples/17_kitchen_sink/`*
+
+Every parser feature in a single file. Use this as a regression test — if it
+validates and loads correctly, the parser is working.
+
+## Source: `sink_source.xlsx` (4 sheets)
+
+| Sheet | Rows | Purpose |
+|---|---|---|
+| Orders | 6 data rows | main table — all 6 data types, messy values (₹, brackets, NA) |
+| Items | 8 data rows | child table — FK to orders via order_id |
+| Summary | 5 rows | key_value layout — label/value pairs |
+| Archive | 1 row | exists but active=N — completely skipped |
+
+## Configuration: `sink_config.xlsx`
+
+### target_config
+postgres, database `excel_parser`, schema `kitchen_sink`, prefix `ks_`, id_type `uuid`.
+
+### sheet_config (4 blocks, 1 inactive)
+
+| table | sheet | layout | row_filter | active |
+|---|---|---|---|---|
+| orders | Orders | table | `col:D = "Active"` | Y |
+| items | Items | table | *(none)* | Y |
+| summary | Summary | key_value | *(none)* | Y |
+| archive | Archive | table | *(none)* | **N** |
+
+### Features covered per column
+
+**orders** (24 columns):
+
+| # | Feature | Column | Detail |
+|---|---|---|---|
+| 1 | col: + text + is_key + script | order_id | `trim\|uppercase` |
+| 2 | col: + text + script | customer | `trim\|titlecase` |
+| 3 | col: + date + date_format | order_date | `%m/%d/%Y` pins MM/DD |
+| 4 | col: + text + script | status | `trim\|lowercase` |
+| 5 | col: + numeric + null_default | subtotal | handles `₹`, `(negative)`, null_default=0 |
+| 6 | col: + numeric + null_default | tax_pct | null_default=0 |
+| 7 | col: + numeric + null_default | discount | NULL → 0 via null_default |
+| 8 | col: + boolean | is_paid | yes/no/true/false/1/0/maybe |
+| 9 | col: + text + null_default | notes | null_default=N/A |
+| 10 | fn:now | loaded_at | timestamp |
+| 11 | fn:today | load_date | date |
+| 12 | fn:uuid | row_uuid | unique per row |
+| 13 | fn:file_name | source_file | source file name |
+| 14 | fn:sequence | row_num | 1,2,3,4,5 |
+| 15 | const: | currency | INR |
+| 16 | const: | api_version | v2 |
+| 17 | expr: + column name ref + script | tax_amount | `{subtotal} * {tax_pct} / 100`, round_2 |
+| 18 | expr: + column name ref | gross_total | `{subtotal} + {tax_amount}` |
+| 19 | expr: + NULL propagation | net_total | `{gross_total} - {discount}` |
+| 20 | expr: + unary minus | neg_discount | `-{discount}` |
+| 21 | expr: + parentheses + literal | surcharge_1pct | `({subtotal} + {tax_amount}) * 0.01`, round_2 |
+| 22 | expr: + string concat | order_label | `{A} & " — " & {B}` |
+| 23 | expr: + fn in expr | id_with_date | `{A} & " " & fn:today` |
+| 24 | col: (duplicate) + date_format + script | order_month | same col:C, `year_month` script |
+
+**items** (8 columns): FK `references` to orders.order_id, `clamp_0` script,
+`%d-%b-%Y` date_format, expr `{qty} * {unit_price}` with column name refs,
+`fn:sequence` (resets per table), `const:piece`.
+
+**summary** (3 columns): key_value layout, `trim` script, `fn:now`.
+
+**archive**: active=N — no table created, no data loaded.
+
+## Run
+
+```bash
+cd examples/17_kitchen_sink
+python3 ../../tools/validator.py sink_config.xlsx sink_source.xlsx --ddl schema.sqlite.sql --target sqlite
+python3 ../../tools/executor.py  sink_config.xlsx sink_source.xlsx --target sqlite --database sink.db --trace 2
+```
+
+Expected: **18 rows** (5 orders + 8 items + 5 summary), 0 errors, 4 warnings.
+
+## Feature checklist
+
+| Feature | Where it's tested |
+|---|---|
+| All 6 data types | orders: text, numeric, integer (fn:sequence), date, timestamp, boolean |
+| source_ref col: | orders columns 1-9, items columns 1-5 |
+| source_ref const: | orders.currency, orders.api_version, items.unit |
+| source_ref fn:now | orders.loaded_at |
+| source_ref fn:today | orders.load_date |
+| source_ref fn:uuid | orders.row_uuid |
+| source_ref fn:file_name | orders.source_file |
+| source_ref fn:sequence | orders.row_num (1-5), items.line_num (1-8, resets) |
+| source_ref expr: arithmetic | orders.tax_amount, orders.gross_total |
+| source_ref expr: column name refs | `{subtotal}`, `{tax_amount}`, `{qty}`, `{unit_price}` |
+| source_ref expr: parentheses | orders.surcharge_1pct |
+| source_ref expr: unary minus | orders.neg_discount |
+| source_ref expr: string concat | orders.order_label, orders.price_label |
+| source_ref expr: fn in expr | orders.id_with_date |
+| source_ref expr: NULL propagation | orders.net_total (when subtotal is negative) |
+| row_filter | orders: `col:D = "Active"` filters out ORD-003 |
+| date_format | orders.order_date `%m/%d/%Y`, items.item_date `%d-%b-%Y` |
+| null_default | orders.subtotal=0, discount=0, notes=N/A |
+| references (FK) | items.order_id → orders.order_id |
+| is_key | orders.order_id, items.order_id |
+| scripts (text) | trim, uppercase, titlecase, lowercase |
+| scripts (numeric) | round_2, clamp_0 |
+| scripts (date) | year_month |
+| key_value layout | summary table |
+| active=N | archive table — skipped entirely |
+| table_prefix | `ks_` on all tables |
+| id_type=uuid | UUID primary keys |
+| messy values | ₹ currency, (bracketed) negatives, NA dates, mixed boolean |
+| data_start_row / data_end_row | orders 2-7, items 2-9, summary 1-5 |
+| description / domain | on every sheet_config row |

@@ -143,8 +143,20 @@ def previews(config: Path, source: Path, limit: int = DEFAULT_LIMIT) -> dict:
         start, end = rowmod.row_range(sheet, ws)
         entry["range"] = [start, end]
 
+        row_ctx = {"file_name": source.name,
+                   "_seq_key": f"_preview_{sheet['table_name']}"}
+        # Parse where filter
+        where_clause = str(sheet.get("row_filter") or "").strip()
+        where_conditions = validator.parse_where(where_clause) if where_clause else []
         for row_num in range(start, end + 1):
-            read = rowmod.build_row(ws, cols, row_num)
+            # Apply where filter
+            if where_conditions:
+                from openpyxl.utils import column_index_from_string as _cis
+                def _where_reader(ltr, _ws=ws, _row=row_num):
+                    return _ws.cell(_row, _cis(ltr)).value
+                if not validator.evaluate_where(where_conditions, _where_reader):
+                    continue
+            read = rowmod.build_row(ws, cols, row_num, row_ctx)
             for ref, column, message in read.bad:
                 entry["bad_cells"].append({"cell": f"{worksheet}!{ref}", "column": column,
                                            "message": message})

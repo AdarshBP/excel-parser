@@ -39,28 +39,87 @@ def _apply_default(value, col):
     return nd
 
 
-def build_row(ws, cols, row_num: int) -> RowRead:
-    """Read one worksheet row through the column configuration."""
-    values, cells, bad = [], [], []
-    for col in cols:
-        letter = validator.column_letter(col["source_ref"])
-        raw = ws.cell(row_num, column_index_from_string(letter)).value
+def build_row(ws, cols, row_num: int, context=None) -> RowRead:
+    """Read one worksheet row through the column configuration.
+
+    context is an optional dict passed to fn: and expr: evaluators.
+    Keys: file_name (str), _seq_key (str for sequence counter).
+
+    Two-pass processing: first col:/const:/fn: columns, then expr: columns.
+    This lets expressions reference already-computed column values by name
+    using {column_name} syntax (lowercase = column name, uppercase = Excel letter).
+    """
+    ctx = context or {}
+    values = [None] * len(cols)
+    cells = [None] * len(cols)
+    bad = []
+    # Map column_name -> index in values list, for expr column references
+    computed = {}  # column_name -> cast value (after pass 1)
+    expr_indices = []  # (index, col) for deferred expr columns
+
+    for i, col in enumerate(cols):
+        if validator.is_expr_ref(col["source_ref"]):
+            # Defer to pass 2 (slots already pre-allocated as None)
+            expr_indices.append((i, col))
+            continue
+        if validator.is_const_ref(col["source_ref"]):
+            raw = validator.const_value(col["source_ref"])
+            cell_ref = f"const:{raw}"
+        elif validator.is_fn_ref(col["source_ref"]):
+            raw = validator.fn_evaluate(col["source_ref"], ctx)
+            cell_ref = f"fn:{validator.fn_name(col['source_ref'])}"
+        else:
+            letter = validator.column_letter(col["source_ref"])
+            raw = ws.cell(row_num, column_index_from_string(letter)).value
+            cell_ref = f"{letter}{row_num}"
+        dfmt = str(col.get("date_format") or "").strip() or None
         try:
-            value = cast(raw, str(col["data_type"]).strip().lower())
+            value = cast(raw, str(col["data_type"]).strip().lower(), date_format=dfmt)
         except ValueError as exc:
             value = None
-            bad.append((f"{letter}{row_num}", col["column_name"], str(exc)))
+            bad.append((cell_ref, col["column_name"], str(exc)))
         value = _apply_default(value, col)
-        # Apply scripts after casting and defaults
         script_spec = str(col.get("script") or "").strip()
         if script_spec and value is not None:
             try:
                 value = scripts.apply(value, script_spec)
             except scripts.ScriptError as exc:
-                bad.append((f"{letter}{row_num}", col["column_name"],
+                bad.append((cell_ref, col["column_name"],
                             f"script '{script_spec}': {exc}"))
-        values.append(value)
-        cells.append((f"{letter}{row_num}", raw, col["column_name"], value))
+        values[i] = value
+        cells[i] = (cell_ref, raw, col["column_name"], value)
+        computed[str(col["column_name"]).strip()] = value
+
+    # Pass 2: evaluate expr: columns (can reference computed column names)
+    for idx, col in expr_indices:
+        body = validator.expr_body(col["source_ref"])
+        def _reader(ref, _ws=ws, _row=row_num, _computed=computed):
+            # Lowercase = column name reference, uppercase = Excel letter
+            if ref in _computed:
+                return _computed[ref]
+            return _ws.cell(_row, column_index_from_string(ref)).value
+        try:
+            raw = validator.evaluate_expr(body, _reader, ctx)
+        except ValueError:
+            raw = None
+        cell_ref = f"expr:{body}"
+        dfmt = str(col.get("date_format") or "").strip() or None
+        try:
+            value = cast(raw, str(col["data_type"]).strip().lower(), date_format=dfmt)
+        except ValueError as exc:
+            value = None
+            bad.append((cell_ref, col["column_name"], str(exc)))
+        value = _apply_default(value, col)
+        script_spec = str(col.get("script") or "").strip()
+        if script_spec and value is not None:
+            try:
+                value = scripts.apply(value, script_spec)
+            except scripts.ScriptError as exc:
+                bad.append((cell_ref, col["column_name"],
+                            f"script '{script_spec}': {exc}"))
+        values[idx] = value
+        cells[idx] = (cell_ref, raw, col["column_name"], value)
+        computed[str(col["column_name"]).strip()] = value
 
     empty = all(v is None for v in values)
     missing = [c["column_name"] for c, v in zip(cols, values)

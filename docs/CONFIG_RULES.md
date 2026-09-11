@@ -83,6 +83,7 @@ Rules that matter:
 | `data_start_row` | yes | first row of real data | 1-based, as shown in Excel. Must be **below** any title/header row. |
 | `data_end_row` | no | last row of real data | leave blank to read to the end of the sheet. Set it to exclude totals rows, notes, or a second block further down. |
 | `active` | yes | `Y` / `N` | `N` = no table generated and nothing loaded. Use it to park a block instead of deleting the rows. |
+| `row_filter` | no | skip rows that don't match | Only rows matching this condition are loaded. Syntax: `col:LETTER op value`, e.g. `col:D > 0`, `col:B = "Delivered"`, `col:A is_not_empty`. Operators: `=`, `!=`, `>`, `<`, `>=`, `<=`, `contains`, `not_contains`, `is_empty`, `is_not_empty`. Combine with `AND` / `OR`. |
 | `description` | no | what the table represents | written as a `COMMENT ON TABLE` in PostgreSQL so AI agents and BI tools can discover meaning. |
 | `domain` | no | business domain / category | e.g. `finance`, `sales`, `food_delivery`. Prepended to the table comment as `[domain]`. |
 | `notes` | no | free text | copied into the generated SQL as a comment. |
@@ -107,7 +108,7 @@ Rules that matter:
 | Column | Required | Meaning | Rules |
 |---|---|---|---|
 | `table_name` | yes | must match a `sheet_config.table_name` | rows whose table is missing or inactive are ignored. |
-| `source_ref` | yes | which Excel column to read | format `col:<letter>`, e.g. `col:A`, `col:AM`. Uppercase letters, no row number, no ranges, no formulas. |
+| `source_ref` | yes | where to get the column value | Four formats: **`col:<letter>`** reads from an Excel column; **`const:<value>`** fills every row with a fixed value; **`fn:<name>`** fills every row with a computed value (`now`, `today`, `uuid`, `file_name`, `sequence`); **`expr:<expression>`** computes a value from other columns/constants/functions (e.g. `expr:{A} + {B}`, `expr:{A} & " - " & {C}`). Expressions support `+`, `-`, `*`, `/` (numeric), `&` (concat), parentheses `()`, unary minus `-{A}`. NULL in arithmetic → NULL (like SQL). `script` and `null_default` apply after the expression result is cast. |
 | `source_header` | no | header text as printed in the file | Documentation only - so a human can see which header a column came from. **Not used for matching or logic.** The parser reads by `source_ref` (column position), never by header text. If empty, the column still loads fine - you just lose the human-readable label in the ER diagram and preview tooltips. A renamed header in the source file does not break the load. |
 | `column_name` | yes | database column name | lowercase `snake_case`, unique **within the table**, must not be `file_id`, `sheet_name`, `source_row_num` or `<table_name>_id` (the loader adds those). |
 | `data_type` | yes | one of `text`, `numeric`, `integer`, `date`, `timestamp`, `boolean` | anything else stops schema generation with an error. |
@@ -117,6 +118,7 @@ Rules that matter:
 | `references` | no | `table_name.column_name` | declares a foreign-key relationship to another table's column, drawn as a dashed line in the ER diagram. Does not create a database constraint - it is for documentation and the diagram only. |
 | `null_default` | no | the value to use when a cell is empty | blank or `null` = store NULL (the default). For `numeric`/`integer` columns, `0` stores zero instead of NULL. For `text`, any string (e.g. an empty string or `N/A`). For `boolean`, `0`/`1`/`true`/`false`. Applied after type casting, so a cell with `-` that casts to NULL will also get the default. |
 | `script` | no | predefined transformation | applied after type casting on every cell. Chain with `\|`: `trim\|uppercase`. Errors block the push. See script list below. |
+| `date_format` | no | pin the date parsing format | e.g. `%d/%m/%Y` (DD/MM/YYYY) or `%m/%d/%Y` (MM/DD/YYYY). Without this, the parser auto-detects (which can confuse DD/MM and MM/DD). Only applies to `date` and `timestamp` columns. |
 | `description` | no | what this column means | written as a `COMMENT ON COLUMN` in PostgreSQL. AI agents and BI tools read these to understand the schema without documentation. |
 | `unit` | no | unit of measurement | e.g. `INR`, `USD`, `percent`, `kg`, `count`. Appended to the column comment in parentheses. |
 
