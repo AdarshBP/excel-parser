@@ -21,210 +21,344 @@ import { WorkbookRefField } from './workbook-ref';
   ],
   template: `
     <div class="page">
-      <div class="page-header">
-        <div class="page-header-left">
-          <h1 class="page-title">Batch run</h1>
-          <p class="page-subtitle">Validate and push multiple source files against one configuration.</p>
-        </div>
-      </div>
-
       <!-- Step indicator -->
-      <div class="step-indicator">
-        <div class="step">
-          <span class="step-circle active">1</span>
-          <div>
+      <div class="stepper">
+        <div class="step"
+             [class.active]="!validateResult() && !pushResult()"
+             [class.done]="!!validateResult() || !!pushResult()">
+          <span class="step-num">
+            @if (!!validateResult() || !!pushResult()) { <i class="pi pi-check"></i> } @else { 1 }
+          </span>
+          <div class="step-text">
             <div class="step-label">Select configuration</div>
             <div class="step-desc">Choose configuration and upload files</div>
           </div>
         </div>
-        <div class="step-line"></div>
-        <div class="step">
-          <span class="step-circle" [class.active]="!!validateResult()" [class.inactive]="!validateResult()">2</span>
-          <div>
+        <div class="step-bar" [class.filled]="!!validateResult() || !!pushResult()"></div>
+        <div class="step"
+             [class.active]="!!validateResult() && !pushResult()"
+             [class.done]="!!pushResult()">
+          <span class="step-num">
+            @if (!!pushResult()) { <i class="pi pi-check"></i> } @else { 2 }
+          </span>
+          <div class="step-text">
             <div class="step-label">Validate</div>
             <div class="step-desc">Check for errors and fix</div>
           </div>
         </div>
-        <div class="step-line"></div>
-        <div class="step">
-          <span class="step-circle" [class.active]="!!pushResult()" [class.inactive]="!pushResult()">3</span>
-          <div>
+        <div class="step-bar" [class.filled]="!!pushResult()"></div>
+        <div class="step"
+             [class.active]="pushing()"
+             [class.done]="!!pushResult() && !pushing()">
+          <span class="step-num">
+            @if (!!pushResult() && !pushing()) { <i class="pi pi-check"></i> } @else { 3 }
+          </span>
+          <div class="step-text">
             <div class="step-label">Push</div>
             <div class="step-desc">Push data to database</div>
           </div>
         </div>
       </div>
 
-      <!-- Config selector -->
-      <div class="section-card">
-        <div class="section-card-header">
-          <div>
-            <div class="section-title">Configuration</div>
-            <div class="section-desc" style="margin-bottom: 0;">Select the configuration to use for this batch run.</div>
+      <!-- Config + Source side by side -->
+      <div class="two-col">
+        <!-- Selected configuration -->
+        <div class="section-card">
+          <div class="section-header">
+            <div class="section-icon"><i class="pi pi-cog"></i></div>
+            <div class="section-info">
+              <div class="section-title">Selected configuration</div>
+              @if (!configRef) {
+                <div class="section-desc">Choose the configuration workbook.</div>
+              }
+            </div>
           </div>
-          <p-button label="Download template" icon="pi pi-download" size="small"
-                    [outlined]="true" (onClick)="downloadTemplate()" />
+          <app-workbook-ref [(value)]="configRef" role="config"
+                            handleKey="batch:config" />
         </div>
-        <app-workbook-ref [(value)]="configRef" role="config"
-                          handleKey="batch:config" />
-      </div>
 
-      <!-- Source files -->
-      <div class="section-card">
-        <div class="section-card-header">
-          <div>
-            <div class="section-title">Source files</div>
-            <div class="section-desc" style="margin-bottom: 0;">Upload multiple source files to validate and push.</div>
+        <!-- Source files -->
+        <div class="section-card">
+          <div class="section-header">
+            <div class="section-icon"><i class="pi pi-cloud-upload"></i></div>
+            <div class="section-info">
+              <div class="section-title">Source files</div>
+              <div class="section-desc">Upload multiple .xlsx or .csv files to validate and push.</div>
+            </div>
           </div>
-          <p-button label="Upload files" icon="pi pi-upload" size="small"
-                    [outlined]="true" (onClick)="fileInput2.click()" />
-          <input #fileInput2 type="file" multiple accept=".xlsx,.xlsm,.csv" hidden
-                 (change)="onFileSelect($event)" />
-        </div>
 
-        <div class="drop-zone" [class.drop-active]="dragOver"
-             (dragover)="onDragOver($event)" (dragleave)="dragOver = false"
-             (drop)="onDrop($event)" (click)="fileInput3.click()">
-          <i class="pi pi-cloud-upload drop-icon"></i>
-          <span>Drop .xlsx or .csv files here, or click to browse</span>
-          <small class="hint">Max 20 files, 20 MB each</small>
-          <input #fileInput3 type="file" multiple accept=".xlsx,.xlsm,.csv" hidden
-                 (change)="onFileSelect($event)" />
-        </div>
-
-        <div class="selected-header">Selected files ({{ uploadedFiles.length + sourceRefs.length }})</div>
-
-        <div class="table-wrap-inner">
-          <table class="files-table">
-            <thead>
-              <tr>
-                <th>File name</th><th>Size</th><th>Status</th><th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              @for (f of uploadedFiles; track f.name; let i = $index) {
-                <tr>
-                  <td>{{ f.name }}</td>
-                  <td>{{ (f.size / 1024).toFixed(0) }} KB</td>
-                  <td>
-                    @if (fileStatus(f.name) === 'valid' || fileStatus(f.name) === 'pushed') {
-                      <i class="pi pi-check-circle status-ok"></i>
-                    } @else if (fileStatus(f.name) === 'error' || fileStatus(f.name) === 'failed') {
-                      <i class="pi pi-times-circle status-err"></i>
-                    } @else {
-                      <span class="muted">Pending</span>
-                    }
-                  </td>
-                  <td>
-                    <p-button icon="pi pi-times" size="small" [text]="true" severity="danger"
-                              pTooltip="Remove" (onClick)="removeUpload(i)" />
-                  </td>
-                </tr>
-              }
-              @for (ref of sourceRefs; track ref; let i = $index) {
-                <tr>
-                  <td>{{ fileName(ref) }}</td>
-                  <td>—</td>
-                  <td>
-                    @if (fileStatus(ref) === 'valid' || fileStatus(ref) === 'pushed') {
-                      <i class="pi pi-check-circle status-ok"></i>
-                    } @else if (fileStatus(ref) === 'error' || fileStatus(ref) === 'failed') {
-                      <i class="pi pi-times-circle status-err"></i>
-                    } @else {
-                      <span class="muted">Pending</span>
-                    }
-                  </td>
-                  <td>
-                    <p-button icon="pi pi-times" size="small" [text]="true" severity="danger"
-                              pTooltip="Remove" (onClick)="removeFile(i)" />
-                  </td>
-                </tr>
-              }
-              @if (!uploadedFiles.length && !sourceRefs.length) {
-                <tr>
-                  <td colspan="4">
-                    <div class="empty-state">
-                      <div class="empty-state-icon"><i class="pi pi-list"></i></div>
-                      <p class="empty-state-title">No files selected yet</p>
-                      <p class="empty-state-desc">Upload one or more files to continue.</p>
-                    </div>
-                  </td>
-                </tr>
-              }
-            </tbody>
-          </table>
+          <div class="drop-zone" [class.drop-active]="dragOver"
+               (dragover)="onDragOver($event)" (dragleave)="dragOver = false"
+               (drop)="onDrop($event)" (click)="fileInput2.click()">
+            <i class="pi pi-cloud-upload drop-icon"></i>
+            <span>Drop .xlsx or .csv files here, or click to browse</span>
+            <small class="drop-hint">Supports multiple files</small>
+            <input #fileInput2 type="file" multiple accept=".xlsx,.xlsm,.csv" hidden
+                   (change)="onFileSelect($event)" />
+          </div>
         </div>
       </div>
 
-      <!-- Validation results -->
+      <!-- Validation results summary -->
       @if (validateResult()) {
         <div class="section-card">
-          <div class="section-title">Validation results</div>
+          <div class="section-header">
+            <div class="section-icon success-icon"><i class="pi pi-check-circle"></i></div>
+            <div class="section-info">
+              <div class="section-title">Validation results</div>
+              <div class="section-desc" [class.success-text]="validateResult()!.all_valid"
+                   [class.error-text]="!validateResult()!.all_valid">
+                @if (validateResult()!.all_valid) {
+                  All files are valid and ready to push.
+                } @else {
+                  {{ validateResult()!.errors }} file(s) have errors. Remove or fix them before pushing.
+                }
+              </div>
+            </div>
+            @if (showValidationDetails) {
+              <p-button label="Hide validation details" size="small" [text]="true"
+                        icon="pi pi-eye-slash" (onClick)="showValidationDetails = false" />
+            } @else {
+              <p-button label="View validation details" size="small" [text]="true"
+                        icon="pi pi-arrow-right" iconPos="right"
+                        (onClick)="showValidationDetails = true" />
+            }
+          </div>
 
-          <div class="batch-stats">
-            <div class="push-stat">
-              <span class="push-stat-value">{{ validateResult()!.total }}</span>
-              <span class="push-stat-label">total</span>
+          <div class="stats-row">
+            <div class="stat-card">
+              <div class="stat-icon"><i class="pi pi-file"></i></div>
+              <div class="stat-body">
+                <div class="stat-value">{{ validateResult()!.total }}</div>
+                <div class="stat-label">Total files</div>
+              </div>
             </div>
-            <div class="push-stat" [class.push-stat-ok]="validateResult()!.valid > 0">
-              <span class="push-stat-value">{{ validateResult()!.valid }}</span>
-              <span class="push-stat-label">valid</span>
+            <div class="stat-card stat-success">
+              <div class="stat-icon"><i class="pi pi-check-circle"></i></div>
+              <div class="stat-body">
+                <div class="stat-value">{{ validateResult()!.valid }}</div>
+                <div class="stat-label">Valid files</div>
+              </div>
             </div>
-            <div class="push-stat" [class.push-stat-err]="validateResult()!.errors > 0">
-              <span class="push-stat-value">{{ validateResult()!.errors }}</span>
-              <span class="push-stat-label">errors</span>
+            <div class="stat-card" [class.stat-danger]="validateResult()!.errors > 0">
+              <div class="stat-icon"><i class="pi pi-times-circle"></i></div>
+              <div class="stat-body">
+                <div class="stat-value">{{ validateResult()!.errors }}</div>
+                <div class="stat-label">Errors</div>
+              </div>
             </div>
           </div>
 
-          @if (!validateResult()!.all_valid) {
-            <p-message severity="error"
-              text="Remove files with errors before pushing. All files must pass validation." />
-          } @else {
-            <p-message severity="success" text="All files are valid and ready to push." />
-          }
-
-          <div class="val-list">
-            @for (r of validateResult()!.results; track r.ref) {
-              <div class="val-file" [class.val-ok]="r.status === 'valid'"
-                   [class.val-err]="r.status === 'error'">
-                <div class="val-header" (click)="toggleExpand(r.ref)">
-                  <i class="pi" [class.pi-check-circle]="r.status === 'valid'"
-                     [class.pi-times-circle]="r.status === 'error'"
-                     [class.status-ok]="r.status === 'valid'"
-                     [class.status-err]="r.status === 'error'"></i>
-                  <div class="val-info">
-                    <span class="val-name">{{ r.name }}</span>
-                    <span class="val-summary">{{ r.message }}</span>
+          <!-- Expandable validation details -->
+          @if (showValidationDetails) {
+            <div class="val-list">
+              @for (r of validateResult()!.results; track r.ref) {
+                <div class="val-file" [class.val-ok]="r.status === 'valid'"
+                     [class.val-err]="r.status === 'error'">
+                  <div class="val-header" (click)="toggleExpand(r.ref)">
+                    <i class="pi" [class.pi-check-circle]="r.status === 'valid'"
+                       [class.pi-times-circle]="r.status === 'error'"
+                       [class.status-ok]="r.status === 'valid'"
+                       [class.status-err]="r.status === 'error'"></i>
+                    <div class="val-info">
+                      <span class="val-name">{{ r.name }}</span>
+                      <span class="val-summary">{{ r.message }}</span>
+                    </div>
+                    @if (r.tables) {
+                      <span class="val-badge">{{ r.tables }} tables · {{ r.rows }} rows</span>
+                    }
+                    @if (r.bad_cells) {
+                      <p-tag [value]="r.bad_cells + ' type issue(s)'" severity="warn" />
+                    }
+                    <i class="pi val-expand"
+                       [class.pi-chevron-down]="!expanded[r.ref]"
+                       [class.pi-chevron-up]="expanded[r.ref]"></i>
                   </div>
-                  @if (r.tables) {
-                    <span class="val-badge">{{ r.tables }} tables · {{ r.rows }} rows</span>
+
+                  @if (expanded[r.ref] && r.issues?.length) {
+                    <div class="val-details">
+                      @for (issue of r.issues; track $index) {
+                        <div class="val-issue">
+                          <p-tag [value]="issue.severity"
+                                 [severity]="issue.severity === 'error' ? 'danger' : 'warn'" />
+                          <span class="val-where">{{ issue.where }}</span>
+                          <span>{{ issue.message }}</span>
+                        </div>
+                      }
+                    </div>
                   }
-                  @if (r.bad_cells) {
-                    <p-tag [value]="r.bad_cells + ' type issue(s)'" severity="warn" />
+                  @if (expanded[r.ref] && !r.issues?.length && r.status === 'error') {
+                    <div class="val-details">
+                      <span class="val-reason">{{ r.message }}</span>
+                    </div>
                   }
-                  @if (r.skipped) {
-                    <p-tag [value]="r.skipped + ' skipped'" severity="warn" />
+                </div>
+              }
+            </div>
+          }
+        </div>
+      }
+
+      <!-- Files table + detail panel -->
+      @if (uploadedFiles().length || sourceRefs.length) {
+        <div class="section-card">
+          <div class="section-header">
+            <div class="section-icon"><i class="pi pi-file"></i></div>
+            <div class="section-info">
+              <div class="section-title">Files ({{ totalFiles() }})</div>
+              <div class="section-desc">
+                @if (validateResult()?.all_valid) {
+                  All files passed validation and are ready to be pushed.
+                } @else if (validateResult()) {
+                  {{ validateResult()!.errors }} file(s) need attention.
+                } @else {
+                  Select files and validate before pushing.
+                }
+              </div>
+            </div>
+            <div class="table-controls">
+              <span class="p-input-icon-left search-wrap">
+                <input pInputText [(ngModel)]="fileSearch" placeholder="Search files..."
+                       class="search-input" />
+              </span>
+            </div>
+          </div>
+
+          <div class="files-split" [class.has-detail]="!!selectedFile()">
+            <!-- Table -->
+            <div class="table-wrap">
+              <table class="files-table">
+                <thead>
+                  <tr>
+                    <th class="col-num">#</th>
+                    <th>File name</th>
+                    <th class="col-tables">Tables</th>
+                    <th class="col-rows">Rows</th>
+                    <th class="col-size">Size</th>
+                    <th class="col-status">Validation</th>
+                    <th class="col-actions">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (f of filteredFiles(); track f.name; let i = $index) {
+                    <tr [class.row-selected]="selectedFile() === f.name"
+                        (click)="selectFile(f.name)">
+                      <td class="col-num">{{ i + 1 }}</td>
+                      <td>
+                        <div class="file-cell">
+                          <i class="pi pi-file-excel file-type-icon"></i>
+                          <span class="file-cell-name">{{ f.name }}</span>
+                        </div>
+                      </td>
+                      <td class="col-tables">{{ fileResultFor(f.name)?.tables ?? '—' }}</td>
+                      <td class="col-rows">{{ fileResultFor(f.name)?.rows ?? '—' }}</td>
+                      <td class="col-size">{{ (f.size / 1024).toFixed(0) }} KB</td>
+                      <td class="col-status">
+                        @if (fileStatus(f.name) === 'valid' || fileStatus(f.name) === 'pushed') {
+                          <p-tag value="Valid" severity="success" />
+                        } @else if (fileStatus(f.name) === 'error' || fileStatus(f.name) === 'failed') {
+                          <p-tag value="Error" severity="danger" />
+                        } @else {
+                          <p-tag value="Pending" severity="secondary" />
+                        }
+                      </td>
+                      <td class="col-actions">
+                        <p-button icon="pi pi-eye" size="small" [text]="true" [rounded]="true"
+                                  pTooltip="View details"
+                                  (onClick)="selectFile(f.name); $event.stopPropagation()" />
+                        <p-button icon="pi pi-times" size="small" [text]="true" [rounded]="true"
+                                  severity="danger" pTooltip="Remove"
+                                  (onClick)="removeUpload(uploadedFiles().indexOf(f)); $event.stopPropagation()" />
+                      </td>
+                    </tr>
                   }
-                  <i class="pi val-expand"
-                     [class.pi-chevron-down]="!expanded[r.ref]"
-                     [class.pi-chevron-up]="expanded[r.ref]"></i>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Detail panel (right side) -->
+            @if (selectedFile(); as name) {
+              <div class="file-detail">
+                <div class="detail-top">
+                  <div class="detail-title">
+                    <i class="pi pi-file-excel file-type-icon"></i>
+                    <span>{{ name }}</span>
+                  </div>
+                  <p-button icon="pi pi-times" size="small" [text]="true" [rounded]="true"
+                            pTooltip="Close" (onClick)="selectedFile.set(null)" />
                 </div>
 
-                @if (expanded[r.ref] && r.issues?.length) {
-                  <div class="val-details">
-                    @for (issue of r.issues; track $index) {
-                      <div class="val-issue">
-                        <p-tag [value]="issue.severity"
-                               [severity]="issue.severity === 'error' ? 'danger' : 'warn'" />
-                        <span class="val-where">{{ issue.where }}</span>
-                        <span>{{ issue.message }}</span>
+                @if (fileResultFor(name); as r) {
+                  <!-- Summary -->
+                  <div class="detail-summary">
+                    <div class="detail-row">
+                      <span class="detail-label">Status</span>
+                      @if (r.status === 'valid' || r.status === 'pushed') {
+                        <p-tag value="Valid" severity="success" />
+                      } @else if (r.status === 'error' || r.status === 'failed') {
+                        <p-tag value="Error" severity="danger" />
+                      } @else {
+                        <p-tag value="Pending" severity="secondary" />
+                      }
+                    </div>
+                    <div class="detail-row">
+                      <span class="detail-label">Message</span>
+                      <span class="detail-value">{{ r.message }}</span>
+                    </div>
+                    @if (r.tables) {
+                      <div class="detail-row">
+                        <span class="detail-label">Tables</span>
+                        <span class="detail-value">{{ r.tables }}</span>
+                      </div>
+                    }
+                    @if (r.rows) {
+                      <div class="detail-row">
+                        <span class="detail-label">Rows</span>
+                        <span class="detail-value">{{ r.rows }}</span>
+                      </div>
+                    }
+                    @if (r.bad_cells) {
+                      <div class="detail-row">
+                        <span class="detail-label">Type issues</span>
+                        <span class="detail-value detail-warn">{{ r.bad_cells }}</span>
+                      </div>
+                    }
+                    @if (r.skipped) {
+                      <div class="detail-row">
+                        <span class="detail-label">Skipped rows</span>
+                        <span class="detail-value">{{ r.skipped }}</span>
+                      </div>
+                    }
+                    @if (r.sha256) {
+                      <div class="detail-row">
+                        <span class="detail-label">SHA-256</span>
+                        <code class="detail-value detail-sha">{{ r.sha256 }}</code>
                       </div>
                     }
                   </div>
-                }
-                @if (expanded[r.ref] && !r.issues?.length && r.status === 'error') {
-                  <div class="val-details">
-                    <span class="val-reason">{{ r.message }}</span>
+
+                  <!-- Issues list -->
+                  @if (r.issues?.length) {
+                    <div class="detail-issues-header">
+                      Issues ({{ r.issues.length }})
+                    </div>
+                    <div class="detail-issues">
+                      @for (issue of r.issues; track $index) {
+                        <div class="detail-issue">
+                          <p-tag [value]="issue.severity"
+                                 [severity]="issue.severity === 'error' ? 'danger' : 'warn'" />
+                          <div class="detail-issue-body">
+                            <span class="detail-issue-where">{{ issue.where }}</span>
+                            <span class="detail-issue-msg">{{ issue.message }}</span>
+                          </div>
+                        </div>
+                      }
+                    </div>
+                  }
+                } @else {
+                  <div class="detail-empty">
+                    <i class="pi pi-info-circle"></i>
+                    <span>Run validation to see details for this file.</span>
                   </div>
                 }
               </div>
@@ -236,29 +370,43 @@ import { WorkbookRefField } from './workbook-ref';
       <!-- Push result -->
       @if (pushResult()) {
         <div class="section-card">
-          <div class="section-title">Push complete</div>
-          <div class="batch-stats">
-            <div class="push-stat">
-              <span class="push-stat-value">{{ pushResult()!.pushed }}</span>
-              <span class="push-stat-label">pushed</span>
-            </div>
-            <div class="push-stat">
-              <span class="push-stat-value">{{ pushResult()!.total_rows }}</span>
-              <span class="push-stat-label">rows</span>
-            </div>
-            <div class="push-stat" [class.push-stat-err]="pushResult()!.failed > 0">
-              <span class="push-stat-value">{{ pushResult()!.failed }}</span>
-              <span class="push-stat-label">failed</span>
+          <div class="section-header">
+            <div class="section-icon success-icon"><i class="pi pi-check-circle"></i></div>
+            <div class="section-info">
+              <div class="section-title">Push complete</div>
             </div>
           </div>
-          <div class="file-list">
+          <div class="stats-row">
+            <div class="stat-card stat-success">
+              <div class="stat-icon"><i class="pi pi-check-circle"></i></div>
+              <div class="stat-body">
+                <div class="stat-value">{{ pushResult()!.pushed }}</div>
+                <div class="stat-label">Pushed</div>
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon"><i class="pi pi-database"></i></div>
+              <div class="stat-body">
+                <div class="stat-value">{{ pushResult()!.total_rows }}</div>
+                <div class="stat-label">Total rows</div>
+              </div>
+            </div>
+            <div class="stat-card" [class.stat-danger]="pushResult()!.failed > 0">
+              <div class="stat-icon"><i class="pi pi-times-circle"></i></div>
+              <div class="stat-body">
+                <div class="stat-value">{{ pushResult()!.failed }}</div>
+                <div class="stat-label">Failed</div>
+              </div>
+            </div>
+          </div>
+          <div class="push-files">
             @for (f of pushResult()!.files; track f.ref) {
-              <div class="file-row" [class.file-ok]="f.status === 'pushed'"
-                   [class.file-err]="f.status === 'failed' || f.status === 'skipped'">
-                <i class="pi pi-file file-icon"></i>
-                <div class="file-info">
-                  <span class="file-name">{{ f.name }}</span>
-                  <span class="file-meta">
+              <div class="push-file" [class.push-ok]="f.status === 'pushed'"
+                   [class.push-err]="f.status === 'failed' || f.status === 'skipped'">
+                <i class="pi pi-file file-type-icon"></i>
+                <div class="push-file-info">
+                  <span class="push-file-name">{{ f.name }}</span>
+                  <span class="push-file-meta">
                     @if (f.status === 'pushed') {
                       {{ f.rows }} rows · file_id {{ f.file_id }}
                     } @else {
@@ -277,85 +425,186 @@ import { WorkbookRefField } from './workbook-ref';
       <!-- Error -->
       @if (error()) { <p-message severity="error" [text]="error()!" /> }
 
-      <!-- Actions -->
-      <div class="actions">
-        <p-button label="Validate all" icon="pi pi-check" size="small"
-                  [outlined]="true" [loading]="validating()"
-                  [disabled]="!configRef || (!sourceRefs.length && !uploadedFiles.length)"
-                  pTooltip="Check all files against the configuration" tooltipPosition="top"
-                  (onClick)="validate()" />
-        <p-button label="Push all" icon="pi pi-play" size="small" severity="success"
-                  [loading]="pushing()" [disabled]="!canPush()"
-                  pTooltip="Push all valid files to the database" tooltipPosition="top"
-                  (onClick)="push()" />
+      <!-- Bottom action bar -->
+      <div class="bottom-bar">
+        <div class="bottom-info">
+          @if (hasFiles()) {
+            <strong>{{ totalFiles() }} files selected</strong>
+            @if (totalRows()) {
+              <span class="bottom-sep">·</span>
+              <span>{{ totalRows() }} rows</span>
+            }
+            <span class="bottom-sep">·</span>
+            <span>
+              @if (canPush()) {
+                Ready to push to database
+              } @else if (pushResult()) {
+                Push complete
+              } @else if (validateResult()) {
+                Fix errors before pushing
+              } @else {
+                Validate before pushing
+              }
+            </span>
+          } @else {
+            <span>Upload files and select a configuration to get started</span>
+          }
+        </div>
+        <div class="bottom-actions">
+          <p-button label="Validate all" icon="pi pi-check"
+                    [outlined]="true" [loading]="validating()"
+                    [disabled]="!configRef || !hasFiles()"
+                    pTooltip="Check all files against the configuration" tooltipPosition="top"
+                    (onClick)="validate()" />
+          <p-button label="Push all to database" icon="pi pi-play" severity="danger"
+                    [loading]="pushing()" [disabled]="!canPush()"
+                    pTooltip="Push all valid files to the database" tooltipPosition="top"
+                    (onClick)="push()" />
+        </div>
       </div>
     </div>
-
   `,
   styles: `
-    .page { display: grid; gap: 1rem; padding: 1.5rem 2rem; }
+    .page { display: grid; gap: 1rem; padding: 1.5rem 2rem; padding-bottom: 5rem; }
 
-    .section-card-header { display: flex; align-items: flex-start; justify-content: space-between;
-                           gap: 1rem; margin-bottom: .75rem; }
+    /* ── Stepper ── */
+    .stepper { display: flex; align-items: center; gap: 0; padding: .75rem 0; }
+    .step { display: flex; align-items: center; gap: .5rem; }
+    .step-num { display: flex; align-items: center; justify-content: center;
+                width: 1.75rem; height: 1.75rem; border-radius: 50%; flex-shrink: 0;
+                font-size: .75rem; font-weight: 700;
+                background: var(--surface-hover); color: var(--text-secondary);
+                border: 2px solid var(--border); transition: all .2s; }
+    .step-num .pi { font-size: .7rem; font-weight: 700; }
+    .step.active .step-num { background: var(--primary); color: #fff; border-color: var(--primary); }
+    .step.done .step-num { background: var(--success); color: #fff; border-color: var(--success); }
+    .step-text { min-width: 0; }
+    .step-label { font-size: .8rem; font-weight: 600; }
+    .step-desc { font-size: .68rem; color: var(--text-secondary); }
+    .step-bar { flex: 1; height: 3px; background: var(--border); margin: 0 .5rem;
+                border-radius: 2px; transition: background .3s; }
+    .step-bar.filled { background: var(--primary); }
 
-    .config-row, .add-row { display: flex; gap: .4rem; align-items: center; }
-    .config-result { display: flex; gap: .5rem; align-items: center; padding: .4rem .5rem;
-                     border: 1px solid var(--border); border-radius: var(--radius-sm);
-                     margin-top: .25rem; }
-    .config-result .file-name { font-weight: 600; font-size: .82rem; }
-    .config-result .file-path { font-size: .68rem; color: var(--text-secondary);
-                                flex: 1; overflow: hidden; text-overflow: ellipsis;
-                                white-space: nowrap; }
-    .add-section { display: grid; gap: .4rem; }
-    .hint { font-size: .7rem; color: var(--text-secondary); }
-    .config-row input, .add-row input { flex: 1; min-width: 0; }
+    /* ── Two-column layout ── */
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;
+               align-items: stretch; }
+    .two-col .section-card { min-width: 0; display: flex; flex-direction: column; }
+    .two-col .section-card .section-header { min-height: 3rem; }
+    .two-col .section-card :is(app-workbook-ref, .drop-zone) { flex: 1; min-height: 10rem; }
+    .two-col app-workbook-ref { display: flex; flex-direction: column; }
+    .two-col app-workbook-ref ::ng-deep .edit-card { flex: 1; display: flex; flex-direction: column; }
+    .two-col app-workbook-ref ::ng-deep .edit-body { flex: 1; display: flex; flex-direction: column;
+                                                      justify-content: center; }
+    .two-col app-workbook-ref ::ng-deep .card { height: 100%; }
 
-    .selected-header { font-size: .85rem; font-weight: 600; margin-top: 1rem; margin-bottom: .35rem; }
+    /* ── Section cards ── */
+    .section-card { border: 1px solid var(--border); border-radius: var(--radius);
+                    background: var(--surface); padding: 1rem 1.25rem; }
+    .section-header { display: flex; align-items: center; gap: .75rem; margin-bottom: .75rem; }
+    .section-icon { display: flex; align-items: center; justify-content: center;
+                    width: 2.25rem; height: 2.25rem; border-radius: 50%;
+                    background: var(--surface-hover); flex-shrink: 0; }
+    .section-icon .pi { font-size: .9rem; color: var(--text-secondary); }
+    .success-icon { background: color-mix(in srgb, var(--success) 15%, transparent); }
+    .success-icon .pi { color: var(--success); }
+    .section-info { flex: 1; min-width: 0; }
+    .section-title { font-size: .9rem; font-weight: 700; }
+    .section-desc { font-size: .75rem; color: var(--text-secondary); margin-top: .1rem; }
+    .success-text { color: var(--success); }
+    .error-text { color: var(--danger); }
+    .section-actions { display: flex; gap: .5rem; align-items: center; flex-shrink: 0; }
+    .hint { font-size: .68rem; color: var(--text-secondary); }
 
-    /* Files table */
-    .table-wrap-inner { border: 1px solid var(--border); border-radius: var(--radius-sm);
-                        overflow: hidden; }
+    /* ── Drop zone ── */
+    .drop-zone { display: flex; flex-direction: column; align-items: center;
+                 justify-content: center; gap: .35rem;
+                 padding: 1.5rem; border: 2px dashed var(--border-strong); border-radius: var(--radius);
+                 cursor: pointer; transition: all .2s; text-align: center;
+                 color: var(--text-secondary); font-size: .82rem; }
+    .drop-zone:hover { border-color: var(--primary); background: var(--primary-soft); }
+    .drop-zone.drop-active { border-color: var(--primary); background: var(--primary-soft);
+                             border-style: solid; }
+    .drop-icon { font-size: 1.5rem; color: var(--primary); }
+    .drop-hint { font-size: .7rem; color: var(--text-secondary); }
+
+    /* ── Stats row ── */
+    .stats-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: .75rem; }
+    .stat-card { display: flex; align-items: center; gap: .75rem; padding: .85rem 1rem;
+                 border: 1px solid var(--border); border-radius: var(--radius-sm);
+                 background: var(--surface); }
+    .stat-icon { display: flex; align-items: center; justify-content: center;
+                 width: 2.5rem; height: 2.5rem; border-radius: 50%;
+                 background: var(--surface-hover); flex-shrink: 0; }
+    .stat-icon .pi { font-size: 1rem; color: var(--text-secondary); }
+    .stat-success .stat-icon { background: color-mix(in srgb, var(--success) 15%, transparent); }
+    .stat-success .stat-icon .pi { color: var(--success); }
+    .stat-success .stat-value { color: var(--success); }
+    .stat-danger .stat-icon { background: color-mix(in srgb, var(--danger) 15%, transparent); }
+    .stat-danger .stat-icon .pi { color: var(--danger); }
+    .stat-danger .stat-value { color: var(--danger); }
+    .stat-body { min-width: 0; }
+    .stat-value { font-size: 1.25rem; font-weight: 700; line-height: 1.2; }
+    .stat-label { font-size: .7rem; color: var(--text-secondary); text-transform: uppercase;
+                  letter-spacing: .03em; }
+
+    /* ── Files split layout ── */
+    .files-split { display: grid; grid-template-columns: 1fr; gap: 0; }
+    .files-split.has-detail { grid-template-columns: 1fr 22rem; gap: 0; }
+
+    /* ── Files table ── */
+    .table-controls { display: flex; gap: .5rem; align-items: center; flex-shrink: 0; }
+    .search-wrap { min-width: 0; }
+    .search-input { font-size: .8rem; width: 12rem; }
+    .table-wrap { border: 1px solid var(--border); border-radius: var(--radius-sm);
+                  overflow: hidden; }
     .files-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
     .files-table th { background: var(--surface-raised-flat); border-bottom: 1px solid var(--border);
-                      font-size: .72rem; font-weight: 600; text-transform: uppercase;
+                      font-size: .7rem; font-weight: 600; text-transform: uppercase;
                       letter-spacing: .04em; color: var(--text-secondary);
-                      padding: .55rem .75rem; text-align: left; }
-    .files-table td { border-bottom: 1px solid var(--border); padding: .5rem .75rem;
-                      color: var(--text); }
+                      padding: .6rem .75rem; text-align: left; }
+    .files-table td { border-bottom: 1px solid var(--border); padding: .4rem .75rem;
+                      color: var(--text); vertical-align: middle; }
     .files-table tbody tr:last-child td { border-bottom: none; }
     .files-table tbody tr:hover td { background: var(--surface-hover); }
+    .col-num { width: 2.5rem; text-align: center; color: var(--text-secondary); }
+    .col-tables, .col-rows { width: 5rem; text-align: right; }
+    .col-size { width: 5rem; text-align: right; }
+    .col-status { width: 6.5rem; text-align: center; }
+    .col-actions { width: 5rem; text-align: center; white-space: nowrap; }
+    .file-cell { display: flex; align-items: center; gap: .5rem; min-width: 0; }
+    .file-type-icon { color: #217346; font-size: .9rem; flex-shrink: 0; }
+    .file-cell-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis;
+                      white-space: nowrap; }
+    .files-table tbody tr { cursor: pointer; }
+    .files-table tbody tr.row-selected td { background: var(--primary-soft);
+                                             border-color: color-mix(in srgb, var(--primary) 20%, var(--border)); }
 
-    .file-list { display: grid; gap: .25rem; margin-top: .5rem; }
-    .file-row { display: flex; gap: .5rem; align-items: center; padding: .45rem .6rem;
-                border: 1px solid var(--border); border-radius: var(--radius-sm);
-                transition: border-color .15s; }
-    .file-row.file-ok { border-color: color-mix(in srgb, var(--success) 35%, var(--border)); }
-    .file-row.file-err { border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
-    .file-icon { color: var(--text-secondary); flex-shrink: 0; }
-    .file-info { flex: 1; min-width: 0; display: grid; gap: .1rem; }
-    .file-name { font-weight: 600; font-size: .82rem; overflow: hidden;
-                 text-overflow: ellipsis; white-space: nowrap; }
-    .file-path { font-size: .68rem; color: var(--text-secondary); overflow: hidden;
-                 text-overflow: ellipsis; white-space: nowrap; }
-    .file-meta { font-size: .7rem; color: var(--text-secondary); }
-    .file-meta-err { color: var(--danger); }
-    .file-status { flex-shrink: 0; }
-    .status-ok { color: var(--success); }
-    .status-err { color: var(--danger); }
-
-    .batch-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem;
-                   margin-bottom: .75rem; }
-    .push-stat { text-align: center; padding: .75rem .5rem; border: 1px solid var(--border);
-                 border-radius: var(--radius-sm); }
-    .push-stat-value { display: block; font-size: 1.15rem; font-weight: 700;
-                       margin-bottom: .2rem; }
-    .push-stat-label { font-size: .65rem; text-transform: uppercase; letter-spacing: .04em;
-                       color: var(--text-secondary); }
-    .push-stat-ok .push-stat-value { color: var(--success); }
-    .push-stat-err { border-color: var(--danger); }
-    .push-stat-err .push-stat-value { color: var(--danger); }
-
-    .actions { display: flex; gap: .5rem; justify-content: flex-end; }
+    /* ── File detail panel ── */
+    .file-detail { border-left: 1px solid var(--border); padding: .75rem;
+                   overflow-y: auto; max-height: 28rem; background: var(--surface); }
+    .detail-top { display: flex; align-items: center; justify-content: space-between;
+                  margin-bottom: .65rem; gap: .5rem; }
+    .detail-title { display: flex; align-items: center; gap: .4rem; font-weight: 600;
+                    font-size: .82rem; min-width: 0; overflow: hidden;
+                    text-overflow: ellipsis; white-space: nowrap; }
+    .detail-summary { display: grid; gap: .35rem; margin-bottom: .75rem; }
+    .detail-row { display: grid; grid-template-columns: 6.5rem 1fr; gap: .35rem;
+                  font-size: .78rem; align-items: start; }
+    .detail-label { color: var(--text-secondary); font-weight: 500; }
+    .detail-value { overflow-wrap: anywhere; }
+    .detail-warn { color: #d97706; font-weight: 600; }
+    .detail-sha { font-size: .65rem; word-break: break-all; }
+    .detail-issues-header { font-size: .72rem; font-weight: 700; text-transform: uppercase;
+                            letter-spacing: .04em; color: var(--text-secondary);
+                            margin-bottom: .35rem; padding-top: .5rem;
+                            border-top: 1px solid var(--border); }
+    .detail-issues { display: grid; gap: .3rem; }
+    .detail-issue { display: flex; gap: .4rem; align-items: flex-start; font-size: .75rem; }
+    .detail-issue-body { min-width: 0; }
+    .detail-issue-where { display: block; font-size: .68rem; color: var(--text-secondary); }
+    .detail-issue-msg { display: block; }
+    .detail-empty { display: flex; gap: .4rem; align-items: center; padding: 1rem .5rem;
+                    color: var(--text-secondary); font-size: .8rem; }
 
     /* ── Validation detail list ── */
     .val-list { display: grid; gap: .35rem; margin-top: .75rem; }
@@ -380,27 +629,51 @@ import { WorkbookRefField } from './workbook-ref';
                  font-size: .75rem; padding: .2rem 0; }
     .val-where { color: var(--text-secondary); font-size: .72rem; }
     .val-reason { font-size: .78rem; color: var(--danger); }
+    .status-ok { color: var(--success); }
+    .status-err { color: var(--danger); }
+
+    /* ── Push results ── */
+    .push-files { display: grid; gap: .25rem; margin-top: .75rem; }
+    .push-file { display: flex; gap: .5rem; align-items: center; padding: .5rem .65rem;
+                 border: 1px solid var(--border); border-radius: var(--radius-sm); }
+    .push-ok { border-left: 3px solid var(--success); }
+    .push-err { border-left: 3px solid var(--danger); }
+    .push-file-info { flex: 1; min-width: 0; display: grid; gap: .1rem; }
+    .push-file-name { font-weight: 600; font-size: .82rem; overflow: hidden;
+                      text-overflow: ellipsis; white-space: nowrap; }
+    .push-file-meta { font-size: .7rem; color: var(--text-secondary); }
+
+    /* ── Bottom bar ── */
+    .bottom-bar { position: fixed; bottom: 0; left: 12.5rem; right: 0;
+                  display: flex; align-items: center; justify-content: space-between;
+                  padding: .75rem 2rem; background: var(--surface);
+                  border-top: 1px solid var(--border); z-index: 20;
+                  box-shadow: 0 -2px 8px rgba(0,0,0,.08); }
+    .bottom-info { font-size: .82rem; color: var(--text-secondary);
+                   display: flex; align-items: center; gap: .35rem; }
+    .bottom-info strong { color: var(--text); }
+    .bottom-sep { color: var(--border-strong); }
+    .bottom-actions { display: flex; gap: .5rem; }
 
     .muted { color: var(--text-secondary); font-size: .8rem; }
 
-    /* ── Drop zone ── */
-    .drop-zone { display: flex; flex-direction: column; align-items: center; gap: .4rem;
-                 padding: 1.5rem; border: 2px dashed var(--border-strong); border-radius: var(--radius);
-                 cursor: pointer; transition: all .2s; text-align: center;
-                 color: var(--text-secondary); font-size: .82rem; margin-bottom: .25rem; }
-    .drop-zone:hover { border-color: var(--primary); background: var(--primary-soft); }
-    .drop-zone.drop-active { border-color: var(--primary); background: var(--primary-soft);
-                             border-style: solid; }
-    .drop-icon { font-size: 1.5rem; color: var(--primary); }
-
     /* ── tablet ── */
     @media (max-width: 1024px) {
-      .page { padding: 1rem; }
-      .section-card-header { flex-direction: column; gap: .35rem; align-items: flex-start; }
-      .drop-zone { padding: 1rem; }
-      .files-table th { font-size: .65rem; padding: .4rem .5rem; }
-      .files-table td { font-size: .75rem; padding: .35rem .5rem; }
+      .page { padding: 1rem; padding-bottom: 5rem; }
+      .two-col { grid-template-columns: 1fr; }
+      .stepper { flex-wrap: wrap; gap: .25rem; }
+      .step-bar { display: none; }
+      .section-header { flex-direction: column; gap: .5rem; }
+      .section-actions { align-self: flex-start; }
+      .stats-row { grid-template-columns: 1fr; }
+      .table-controls { width: 100%; }
+      .search-input { width: 100%; }
+      .bottom-bar { left: 3rem; padding: .5rem 1rem; }
+      .bottom-info { font-size: .75rem; }
       .val-issue { grid-template-columns: 4.5rem 9rem 1fr; font-size: .7rem; }
+      .files-split.has-detail { grid-template-columns: 1fr; }
+      .file-detail { border-left: none; border-top: 1px solid var(--border); max-height: 20rem; }
+      .files-table .col-tables, .files-table .col-rows { display: none; }
     }
   `,
 })
@@ -412,9 +685,12 @@ export class BatchPage {
   newRef = '';
   sourceRefs: string[] = [];
   expanded: Record<string, boolean> = {};
+  showValidationDetails = false;
+  fileSearch = '';
+  selectedFile = signal<string | null>(null);
 
   // Upload state
-  uploadedFiles: File[] = [];
+  uploadedFiles = signal<File[]>([]);
   dragOver = false;
 
   testingConfig = signal(false);
@@ -435,21 +711,48 @@ export class BatchPage {
 
   canPush = computed(() => {
     const v = this.validateResult();
-    return !!v && v.all_valid && v.valid > 0 && !this.pushResult();
+    if (!v || !v.all_valid || v.valid === 0 || this.pushResult()) return false;
+    // Only enable after ALL files have been validated (not mid-validation)
+    return !this.validating() && v.results.length === this.totalFiles();
   });
 
-  hasFiles = computed(() => this.sourceRefs.length > 0 || this.uploadedFiles.length > 0);
+  hasFiles = computed(() => this.sourceRefs.length > 0 || this.uploadedFiles().length > 0);
+
+  totalFiles = computed(() => this.uploadedFiles().length + this.sourceRefs.length);
+
+  totalRows = computed(() => {
+    const v = this.validateResult();
+    if (!v) return 0;
+    return v.results.reduce((sum, r) => sum + (r.rows || 0), 0);
+  });
+
+  filteredFiles = computed(() => {
+    const q = this.fileSearch.toLowerCase().trim();
+    if (!q) return this.uploadedFiles();
+    return this.uploadedFiles().filter(f => f.name.toLowerCase().includes(q));
+  });
+
+  selectFile(name: string) {
+    this.selectedFile.set(this.selectedFile() === name ? null : name);
+  }
 
   toggleExpand(ref: string) {
     this.expanded = { ...this.expanded, [ref]: !this.expanded[ref] };
   }
 
   constructor() {
-    // Pre-load Drive status so Drive tab shows connected immediately
     this.loadDriveStatus();
   }
 
-  // ── config test ──
+  // ── config ──
+
+  replaceConfig() {
+    this.configRef = '';
+    this.configOk.set(false);
+    this.configError.set(null);
+    this.validateResult.set(null);
+    this.pushResult.set(null);
+  }
 
   downloadTemplate() {
     window.open('/api/template', '_blank');
@@ -492,16 +795,16 @@ export class BatchPage {
     return ref.replace(/\\/g, '/').split('/').pop() || ref;
   }
 
-  fileResult(ref: string): BatchFileResult | null {
+  fileResultFor(name: string): BatchFileResult | null {
     const vr = this.validateResult();
-    if (vr) return vr.results.find((r) => r.ref === ref) ?? null;
+    if (vr) return vr.results.find((r) => r.name === name) ?? null;
     const pr = this.pushResult();
-    if (pr) return pr.files.find((r) => r.ref === ref) ?? null;
+    if (pr) return pr.files.find((r) => r.name === name) ?? null;
     return null;
   }
 
-  fileStatus(ref: string): string {
-    return this.fileResult(ref)?.status ?? '';
+  fileStatus(name: string): string {
+    return this.fileResultFor(name)?.status ?? '';
   }
 
   // ── file upload ──
@@ -533,19 +836,20 @@ export class BatchPage {
         return;
       }
     }
-    const combined = [...this.uploadedFiles, ...files];
+    const combined = [...this.uploadedFiles(), ...files];
     if (combined.length > 20) {
       this.error.set(`Maximum 20 files allowed (you have ${combined.length})`);
       return;
     }
-    this.uploadedFiles = combined;
+    this.uploadedFiles.set(combined);
     this.validateResult.set(null);
     this.pushResult.set(null);
     this.error.set(null);
   }
 
   removeUpload(index: number) {
-    this.uploadedFiles = this.uploadedFiles.filter((_, i) => i !== index);
+    if (index < 0) return;
+    this.uploadedFiles.set(this.uploadedFiles().filter((_, i) => i !== index));
     this.validateResult.set(null);
     this.pushResult.set(null);
   }
@@ -557,11 +861,11 @@ export class BatchPage {
     this.validateResult.set(null);
     this.pushResult.set(null);
     this.error.set(null);
+    this.showValidationDetails = false;
 
-    if (this.uploadedFiles.length) {
-      // Validate one file at a time — UI updates after each
+    if (this.uploadedFiles().length) {
       const results: BatchFileResult[] = [];
-      const files = [...this.uploadedFiles];
+      const files = [...this.uploadedFiles()];
       const seen: Record<string, string> = {};
 
       const next = (i: number) => {
@@ -570,10 +874,8 @@ export class BatchPage {
           return;
         }
         const file = files[i];
-        // Client-side duplicate check within batch
         this.api.batchValidateOne(this.configRef, file).subscribe({
           next: (r) => {
-            // Duplicate content check within this batch
             if (r.status === 'valid' && r.sha256 && seen[r.sha256]) {
               r.status = 'error';
               r.message = `Duplicate content — identical to ${seen[r.sha256]}`;
@@ -625,10 +927,9 @@ export class BatchPage {
     this.pushing.set(true);
     this.error.set(null);
 
-    if (this.uploadedFiles.length) {
-      // Push one file at a time — UI updates after each
+    if (this.uploadedFiles().length) {
       const fileResults: BatchFileResult[] = [];
-      const files = [...this.uploadedFiles];
+      const files = [...this.uploadedFiles()];
       let totalRows = 0;
 
       const next = (i: number) => {
@@ -653,7 +954,6 @@ export class BatchPage {
               target: { target: '', database: '', db_schema: '', prefix: '' },
             });
             if (r.status === 'failed') {
-              // Stop batch on first failure
               this.pushing.set(false);
               return;
             }
@@ -716,7 +1016,6 @@ export class BatchPage {
     this.driveError.set(null);
 
     if (target === 'config') {
-      // Single select for config
       this.gPicker.pick('Select configuration workbook').subscribe({
         next: (file) => {
           this.pickingDrive.set(false);
@@ -730,7 +1029,6 @@ export class BatchPage {
         },
       });
     } else {
-      // Multi-select for source files
       this.gPicker.pickMany('Select source files (Ctrl/Cmd for multiple)').subscribe({
         next: (files) => {
           this.pickingDrive.set(false);

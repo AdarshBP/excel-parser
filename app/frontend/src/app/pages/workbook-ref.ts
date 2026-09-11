@@ -208,13 +208,13 @@ import { DriveStatus, SourceKind } from '../core/models';
     .edit-body { padding: .6rem .65rem; display: grid; gap: .4rem; }
     .edit-body input, .edit-body p-select { width: 100%; }
     .hint { font-size: .7rem; color: var(--text-secondary); }
-    .browse-section { display: grid; gap: .4rem; }
+    .browse-section { display: grid; gap: .4rem; justify-items: center; }
     .browse-picked { display: flex; gap: .4rem; align-items: center; padding: .35rem .5rem;
                      border: 1px solid color-mix(in srgb, var(--success) 30%, var(--border));
                      border-radius: var(--radius-sm); font-size: .82rem; }
     .browse-picked-name { font-weight: 600; flex: 1; overflow: hidden;
                           text-overflow: ellipsis; white-space: nowrap; }
-    .drive-connect { display: flex; gap: .5rem; align-items: center; }
+    .drive-connect { display: flex; flex-direction: column; gap: .5rem; align-items: center; }
     .drive-bar { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
     ::ng-deep :is(.p-message, .p-message-content, .p-message-text) {
       min-width: 0; max-width: 100%; overflow-wrap: anywhere; white-space: normal; }

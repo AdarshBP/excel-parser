@@ -507,25 +507,15 @@ def _scan_audit_tables() -> list:
     Returns a flat list of file records, one per (file_id, schema) combination,
     with per-table details aggregated. Works regardless of how the push happened
     (project, batch, one-off upload).
-    """
-    import psycopg
-    from psycopg.rows import dict_row as _dr
 
-    service.engine.dbmod.load_env(state.PROJECT_ROOT / ".env")
-    url = os.environ.get("DATABASE_URL")
-    if url:
-        con = psycopg.connect(url, row_factory=_dr)
-    else:
-        con = psycopg.connect(
-            host=os.environ.get("PGHOST", "localhost"),
-            port=os.environ.get("PGPORT", "5432"),
-            dbname=os.environ.get("PGDATABASE", "excel_parser"),
-            user=os.environ.get("PGUSER", ""),
-            password=os.environ.get("PGPASSWORD", ""),
-            row_factory=_dr,
-        )
+    Reuses state.connect() so it works in every environment (local, Docker,
+    production) without duplicating connection logic.
+    """
+    con = state.connect()
 
     # Find every *load_config_audit table across all schemas
+    # (state.connect sets search_path to APP_SCHEMA, but information_schema
+    # queries work regardless of search_path)
     audit_tables = con.execute(
         "SELECT table_schema, table_name FROM information_schema.tables "
         "WHERE table_name LIKE '%%load_config_audit' "
@@ -536,7 +526,7 @@ def _scan_audit_tables() -> list:
     for at in audit_tables:
         schema = at["table_schema"]
         table = at["table_name"]
-        qualified = f'"{schema}"."{table}"' if schema != "public" else f'"{table}"'
+        qualified = f'"{schema}"."{table}"'
         try:
             rows = con.execute(
                 f"SELECT file_id, file_name, file_sha256, source_ref, config_ref, "
@@ -544,7 +534,8 @@ def _scan_audit_tables() -> list:
                 f"column_count, row_count, loaded_at "
                 f"FROM {qualified} ORDER BY loaded_at DESC"
             ).fetchall()
-        except Exception:
+        except Exception as exc:
+            log.warning("could not read %s: %s", qualified, exc)
             continue
 
         for r in rows:
@@ -611,7 +602,121 @@ def data_viewer_file_detail(file_id: str, user: dict = auth.Me) -> dict:
     for f in all_files:
         if f["file_id"] == file_id:
             return f
-    raise HTTPException(status_code=404, detail="no such file")
+    raise HTTPException(status_code=404,
+                        detail=f"File not found: no data has been loaded with file_id "
+                               f"'{file_id}'. It may have been rolled back or the database "
+                               f"was cleared. Refresh the Data Viewer to see current files.")
+
+
+@app.post("/api/data-viewer/files/{file_id}/rollback")
+def data_viewer_rollback(file_id: str, user: dict = auth.Me,
+                         _: None = Depends(csrf)) -> dict:
+    """Delete all rows loaded by a specific file_id and remove audit records.
+
+    The entire operation runs in one transaction — if any table fails,
+    nothing is deleted. The run/batch record in the app schema is updated
+    to 'rolled_back' status.
+    """
+    # Find the file in audit tables to get schema/prefix info
+    all_files = _scan_audit_tables()
+    target_file = None
+    for f in all_files:
+        if f["file_id"] == file_id:
+            target_file = f
+            break
+    if target_file is None:
+        raise HTTPException(status_code=404,
+                            detail=f"Cannot rollback: no data found for file_id '{file_id}'. "
+                                   f"The file may have already been rolled back or the "
+                                   f"database was cleared.")
+
+    db_schema = target_file.get("db_schema") or None
+
+    try:
+        import psycopg
+        from psycopg.rows import dict_row as _dr
+
+        # Connect directly to the target schema (not through state.connect()
+        # which locks search_path to the app schema)
+        state._load_env()
+        url = os.environ.get("DATABASE_URL")
+        if url:
+            con = psycopg.connect(url, row_factory=_dr)
+        else:
+            con = psycopg.connect(
+                host=os.environ.get("PGHOST", "localhost"),
+                port=os.environ.get("PGPORT", "5432"),
+                dbname=os.environ.get("PGDATABASE", "excel_parser"),
+                user=os.environ.get("PGUSER", ""),
+                password=os.environ.get("PGPASSWORD", ""),
+                row_factory=_dr,
+            )
+        schema = db_schema or "public"
+        con.execute(f'SET search_path TO "{schema}"')
+
+        # Find the audit table name (may have a prefix, e.g. swiggy_load_config_audit)
+        audit_table_row = con.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = %s AND table_name LIKE '%%load_config_audit'",
+            (schema,)).fetchone()
+        if not audit_table_row:
+            con.close()
+            raise HTTPException(status_code=404,
+                                detail=f"No audit table found in schema '{schema}'. "
+                                       f"The target schema may have been dropped.")
+        audit_table = audit_table_row["table_name"]
+
+        # Find tables from audit
+        audit_rows = con.execute(
+            f'SELECT table_name FROM "{audit_table}" WHERE file_id = %s',
+            (file_id,)).fetchall()
+        if not audit_rows:
+            con.close()
+            raise HTTPException(status_code=404,
+                                detail=f"No audit records found for file_id '{file_id}' in "
+                                       f"schema '{schema}'. The data may have "
+                                       f"already been deleted.")
+
+        # Count rows per table, then delete
+        deleted = {}
+        total = 0
+        for r in audit_rows:
+            table = r["table_name"]
+            count_row = con.execute(
+                f'SELECT count(*) as c FROM "{table}" WHERE file_id = %s',
+                (file_id,)).fetchone()
+            count = count_row["c"] if count_row else 0
+            con.execute(f'DELETE FROM "{table}" WHERE file_id = %s', (file_id,))
+            deleted[table] = count
+            total += count
+
+        # Delete audit records
+        con.execute(f'DELETE FROM "{audit_table}" WHERE file_id = %s', (file_id,))
+        con.commit()
+        con.close()
+
+        # Update app state: mark run as rolled_back
+        app_con = state.connect()
+        app_con.execute(
+            "UPDATE run SET status = 'rolled_back' WHERE file_id = %s AND user_id = %s",
+            (file_id, user["user_id"]))
+        app_con.commit()
+        app_con.close()
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("rollback failed for file %s: %s", file_id, exc, exc_info=True)
+        raise HTTPException(status_code=500,
+                            detail=f"Rollback failed for '{target_file.get('source_name', file_id)}' "
+                                   f"— the operation was aborted and no data was deleted. "
+                                   f"Please try again or contact support if the issue persists.") from exc
+
+    return {
+        "rolled_back": True, "file_id": file_id,
+        "rows_deleted": deleted, "total_deleted": total,
+        "source_name": target_file.get("source_name"),
+    }
 
 
 # ----------------------------------------------------------------- batch
@@ -1043,7 +1148,8 @@ def test_ref(body: dict, user: dict = auth.Me) -> dict:
                                        f"{', '.join(missing)}. A configuration workbook must "
                                        f"have sheet_config and column_config sheets.")
 
-    return {"ok": True, "name": path.name, "sheets": sheets,
+    display = sources.upload_original_name(ref) if sources.looks_like_upload(ref) else path.name
+    return {"ok": True, "name": display, "sheets": sheets,
             "size": path.stat().st_size, "role": role}
 
 

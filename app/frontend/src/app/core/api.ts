@@ -106,6 +106,11 @@ export class Api {
   dataFileDetail(fileId: string) {
     return this.get<DataFile>(`/data-viewer/files/${fileId}`);
   }
+  rollbackFile(fileId: string) {
+    return this.send<{ rolled_back: boolean; file_id: string; rows_deleted: Record<string, number>;
+                       total_deleted: number; source_name: string }>(
+      'post', `/data-viewer/files/${fileId}/rollback`);
+  }
 
   autoConfig(ref: string, tableName?: string, database?: string, dbSchema?: string) {
     return this.send<{ ok: boolean; config_ref: string; name: string }>(

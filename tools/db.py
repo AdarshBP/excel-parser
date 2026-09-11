@@ -118,6 +118,22 @@ class SqliteTarget:
     def insert_returning_id(self, sql: str, params, id_column: str):
         return self.con.execute(sql, params).lastrowid
 
+    def delete_by_file_id(self, file_id: str, prefix: str = "") -> dict:
+        """Delete all rows loaded by a specific file_id. Returns {table: count}."""
+        audit_table = f"{prefix}load_config_audit"
+        rows = self.con.execute(
+            f"SELECT table_name FROM {audit_table} WHERE file_id = ?",
+            (file_id,)).fetchall()
+        if not rows:
+            return {}
+        deleted = {}
+        for r in rows:
+            table = r[0]
+            cur = self.con.execute(f"DELETE FROM {table} WHERE file_id = ?", (file_id,))
+            deleted[table] = cur.rowcount
+        self.con.execute(f"DELETE FROM {audit_table} WHERE file_id = ?", (file_id,))
+        return deleted
+
     def commit(self) -> None:
         self.con.commit()
 
@@ -257,6 +273,23 @@ class PostgresTarget:
         with self.con.cursor() as cur:
             cur.execute(f"{sql} RETURNING {ident(id_column, 'id column')}", params)
             return cur.fetchone()[0]
+
+    def delete_by_file_id(self, file_id: str, prefix: str = "") -> dict:
+        """Delete all rows loaded by a specific file_id. Returns {table: count}."""
+        audit_table = f"{prefix}load_config_audit"
+        with self.con.cursor() as cur:
+            cur.execute(f"SELECT table_name FROM {audit_table} WHERE file_id = %s",
+                        (file_id,))
+            tables = [r[0] for r in cur.fetchall()]
+        if not tables:
+            return {}
+        deleted = {}
+        with self.con.cursor() as cur:
+            for table in tables:
+                cur.execute(f"DELETE FROM {table} WHERE file_id = %s", (file_id,))
+                deleted[table] = cur.rowcount
+            cur.execute(f"DELETE FROM {audit_table} WHERE file_id = %s", (file_id,))
+        return deleted
 
     def commit(self) -> None:
         self.con.commit()

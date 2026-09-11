@@ -3,6 +3,7 @@ import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ButtonModule } from '@openng/optimus-ui/button';
 import { CardModule } from '@openng/optimus-ui/card';
+import { DialogModule } from '@openng/optimus-ui/dialog';
 import { InputTextModule } from '@openng/optimus-ui/inputtext';
 import { MessageModule } from '@openng/optimus-ui/message';
 import { TagModule } from '@openng/optimus-ui/tag';
@@ -12,7 +13,7 @@ import { DataFile } from '../core/models';
 
 @Component({
   selector: 'app-data-viewer',
-  imports: [DatePipe, FormsModule, ButtonModule, CardModule,
+  imports: [DatePipe, FormsModule, ButtonModule, CardModule, DialogModule,
             InputTextModule, MessageModule, TagModule, TooltipModule],
   template: `
     <div class="page">
@@ -23,7 +24,13 @@ import { DataFile } from '../core/models';
         </div>
       </div>
 
-      @if (error()) { <p-message severity="error" [text]="error()!" /> }
+      @if (error()) {
+        <div class="error-banner">
+          <p-message severity="error" [text]="error()!" />
+          <p-button label="Dismiss" size="small" [text]="true"
+                    (onClick)="error.set(null)" />
+        </div>
+      }
 
       <!-- Search -->
       <div class="filters">
@@ -140,9 +147,37 @@ import { DataFile } from '../core/models';
                         </table>
                       </div>
                     }
+
+                    <!-- Rollback action -->
+                    <div class="rollback-section">
+                      <p-button label="Rollback this file" icon="pi pi-undo" severity="danger"
+                                size="small" [outlined]="true" [loading]="rollingBack()"
+                                pTooltip="Delete all rows loaded by this file"
+                                (onClick)="confirmRollback(d)" />
+                    </div>
                   }
                 </div>
               }
+
+              <!-- Rollback confirmation dialog -->
+              <p-dialog header="Confirm rollback" [(visible)]="showRollbackDialog"
+                        [modal]="true" [closable]="true" [style]="{ width: '28rem' }">
+                @if (rollbackTarget(); as t) {
+                  <p class="rollback-warning">
+                    This will permanently delete <strong>{{ t.row_total }} rows</strong>
+                    across <strong>{{ t.tables.length }} table(s)</strong> loaded from
+                    <strong>{{ t.source_name }}</strong>.
+                  </p>
+                  <p class="rollback-warning-sub">This action cannot be undone.</p>
+                }
+                <div class="rollback-dialog-actions">
+                  <p-button label="Cancel" size="small" [outlined]="true"
+                            (onClick)="showRollbackDialog = false" />
+                  <p-button label="Delete all rows" icon="pi pi-trash" severity="danger"
+                            size="small" [loading]="rollingBack()"
+                            (onClick)="doRollback()" />
+                </div>
+              </p-dialog>
             </div>
           }
         </div>
@@ -222,6 +257,15 @@ import { DataFile } from '../core/models';
     .tables-table td { padding: .3rem .5rem; border-top: 1px solid var(--border); }
     .tables-table .num { text-align: right; font-variant-numeric: tabular-nums; }
 
+    .rollback-section { margin-top: .75rem; padding-top: .75rem;
+                        border-top: 1px solid var(--border); }
+    .rollback-warning { font-size: .85rem; margin: 0 0 .25rem; }
+    .rollback-warning-sub { font-size: .78rem; color: var(--danger); margin: 0 0 1rem; }
+    .rollback-dialog-actions { display: flex; gap: .5rem; justify-content: flex-end; }
+
+    .error-banner { display: flex; align-items: center; gap: .5rem; }
+    .error-banner p-message { flex: 1; }
+
     .muted { color: var(--text-secondary); font-size: .85rem; }
     .center { text-align: center; padding: 2rem 1rem; }
   `,
@@ -233,6 +277,9 @@ export class DataViewerPage {
   expanded = signal<string | null>(null);
   detail = signal<DataFile | null>(null);
   detailLoading = signal(false);
+  rollingBack = signal(false);
+  rollbackTarget = signal<DataFile | null>(null);
+  showRollbackDialog = false;
 
   search = '';
 
@@ -276,6 +323,34 @@ export class DataViewerPage {
     this.api.dataFileDetail(fileId).subscribe({
       next: (d) => { this.detail.set(d); this.detailLoading.set(false); },
       error: (e) => { this.error.set(e.message); this.detailLoading.set(false); },
+    });
+  }
+
+  confirmRollback(file: DataFile) {
+    this.rollbackTarget.set(file);
+    this.showRollbackDialog = true;
+  }
+
+  doRollback() {
+    const target = this.rollbackTarget();
+    if (!target) return;
+    this.rollingBack.set(true);
+    this.error.set(null);
+    this.api.rollbackFile(target.file_id).subscribe({
+      next: (r) => {
+        this.rollingBack.set(false);
+        this.showRollbackDialog = false;
+        this.rollbackTarget.set(null);
+        this.expanded.set(null);
+        this.detail.set(null);
+        // Remove the file from the list
+        this.files.set(this.files().filter(f => f.file_id !== target.file_id));
+      },
+      error: (e) => {
+        this.rollingBack.set(false);
+        this.error.set(e.message);
+        this.showRollbackDialog = false;
+      },
     });
   }
 }

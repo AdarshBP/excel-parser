@@ -55,6 +55,7 @@ rows = con.execute(
 ).fetchall()
 schemas = [r[0] for r in rows]
 
+print(f'  found schemas: {schemas}')
 for s in schemas:
     if s == 'public':
         # Don't drop public itself, but drop all its tables
@@ -71,9 +72,18 @@ for s in schemas:
         print(f'  dropped schema: {s}')
 
 con.commit()
+
+# Verify nothing is left
+remaining = con.execute(
+    \"SELECT schema_name FROM information_schema.schemata \"
+    \"WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'public')\"
+).fetchall()
+if remaining:
+    print(f'  WARNING: schemas still present: {[r[0] for r in remaining]}')
+else:
+    print('  all target schemas dropped')
+
 con.close()
-if not [s for s in schemas if s != 'public']:
-    print('  no custom schemas to drop')
 "
 cd ../..
 
