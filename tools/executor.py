@@ -57,7 +57,7 @@ def now() -> str:
 def execute(config: Path, source: Path, target: str = None, database=None, prefix: str = None,
             schema_sql: str = None, trace: int = 0, log=print, id_type: str = None,
             strict: bool = False, source_ref: str = None, config_ref: str = None,
-            skip_audit: bool = False) -> LoadResult:
+            skip_audit: bool = False, source_name: str = None) -> LoadResult:
     """Insert every configured row of `source` into the configured target.
 
     `target`, `database`, `prefix` and `id_type` override the workbook's
@@ -65,13 +65,16 @@ def execute(config: Path, source: Path, target: str = None, database=None, prefi
 
     With `id_type = uuid` the keys are UUIDs generated here rather than by the
     database, so a row keeps the same key on either target.
+
+    *source_name* overrides the CSV sheet name when the on-disk filename is a
+    content-addressed hash (e.g. uploaded files).
     """
     sheets, columns = validator.read_config(config)
     where = validator.resolve_target(config, target, database, prefix, id_type)
     prefix = where.prefix
     uuid_keys = where.id_type == "uuid"
     import csv_adapter
-    wb = csv_adapter.open_source(source)
+    wb = csv_adapter.open_source(source, source_name)
 
     dbmod.ident(f"{prefix}x", "table_prefix")
     con = dbmod.connect(where.target, where.database, prefix, where.db_schema)

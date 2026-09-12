@@ -20,6 +20,23 @@ def resolve_config(config_ref: str, user_id: str) -> Path:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _csv_source_name(source: Path, source_ref: str, source_path: Path = None) -> str | None:
+    """Original filename stem for CSV files so the adapter uses the right sheet name.
+
+    When a CSV is uploaded, the on-disk name is a content-addressed hash or a
+    temp-dir prefix. This returns the original stem so ``sheet_config.sheet_name``
+    can match.
+    """
+    if source.suffix.lower() != ".csv":
+        return None
+    if source_path is not None:
+        # Direct upload: source_ref is the original filename
+        return Path(source_ref).stem
+    if sources.looks_like_upload(source_ref):
+        return Path(sources.upload_original_name(source_ref)).stem
+    return None
+
+
 def validate_file(config: Path, source_ref: str, user_id: str,
                   overrides: dict, target_schema: str = None,
                   source_path: Path = None) -> dict:
@@ -37,10 +54,13 @@ def validate_file(config: Path, source_ref: str, user_id: str,
         return {"ref": source_ref, "name": name, "status": "error",
                 "message": str(exc), "issues": [], "rows": 0, "tables": 0}
 
+    sname = _csv_source_name(source, source_ref, source_path)
+
     try:
         issues = engine.validator.validate(
             config, source, overrides.get("prefix"), overrides.get("target"),
-            overrides.get("database"), overrides.get("id_type"))
+            overrides.get("database"), overrides.get("id_type"),
+            source_name=sname)
     except SystemExit as exc:
         return {"ref": source_ref, "name": name, "status": "error",
                 "message": str(exc), "issues": [], "rows": 0, "tables": 0}
@@ -53,7 +73,8 @@ def validate_file(config: Path, source_ref: str, user_id: str,
     # Check for data quality issues (strict mode)
     bad_cells, skipped = 0, 0
     try:
-        previews = engine.preview.previews(config, source, limit=0)
+        previews = engine.preview.previews(config, source, limit=0,
+                                           source_name=sname)
         for p in previews.values():
             bad_cells += len(p.get("bad_cells", []))
             skipped += len(p.get("skipped", []))
@@ -97,7 +118,8 @@ def validate_file(config: Path, source_ref: str, user_id: str,
     # Count expected rows
     rows, tables = 0, 0
     try:
-        previews = engine.preview.previews(config, source, limit=0)
+        previews = engine.preview.previews(config, source, limit=0,
+                                           source_name=sname)
         for p in previews.values():
             rows += p.get("loadable_rows", 0)
             tables += 1
@@ -184,12 +206,14 @@ def push_batch(config_ref: str, source_refs: list, user_id: str,
     for ref in source_refs:
         ref = ref.strip()
         source = sources.resolve(ref, "source", user_id)
+        sname = _csv_source_name(source, ref)
         lines = []
         try:
             result = engine.executor.execute(
                 config, source, where.target, database, where.prefix,
                 schema_sql, 0, lines.append, where.id_type, strict=True,
-                source_ref=ref, config_ref=config_ref)
+                source_ref=ref, config_ref=config_ref,
+                source_name=sname)
             file_results.append({
                 "ref": ref, "name": source.name, "status": "pushed",
                 "file_id": result.file_id, "rows": result.total,

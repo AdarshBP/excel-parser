@@ -76,9 +76,9 @@ class CsvWorkbook:
     The sheet name defaults to the filename without extension.
     """
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, name: str = None):
         self._path = path
-        self._name = path.stem
+        self._name = name or path.stem
         self._sheet: CsvSheet | None = None
 
     def _ensure(self) -> CsvSheet:
@@ -108,8 +108,11 @@ def is_csv(path: Path) -> bool:
     return path.suffix.lower() == ".csv"
 
 
-def open_source(path: Path):
+def open_source(path: Path, name: str = None):
     """Open a source file — returns CsvWorkbook for .csv, openpyxl for .xlsx.
+
+    *name* overrides the sheet name for CSV files. Pass the original filename
+    stem when the on-disk name is a content-addressed hash (e.g. uploaded files).
 
     Small files (< 20 MB) are loaded in normal mode so that cell-by-cell
     access is O(1).  ``read_only=True`` streams the XML on each cell
@@ -117,7 +120,7 @@ def open_source(path: Path):
     quadratic.  Only files above the threshold use read_only mode.
     """
     if is_csv(path):
-        return CsvWorkbook(path)
+        return CsvWorkbook(path, name)
     import openpyxl
     read_only = path.stat().st_size > 20 * 1024 * 1024   # 20 MB
     return openpyxl.load_workbook(path, read_only=read_only, data_only=True)

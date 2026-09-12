@@ -872,11 +872,11 @@ def _positive_int(value, where, field, issues, required):
     return number
 
 
-def _check_source(sheets, columns, source: Path, issues) -> None:
+def _check_source(sheets, columns, source: Path, issues, source_name: str = None) -> None:
     """Dry run of the load: every configured cell is read and cast, nothing is written."""
     fn_reset_sequence()  # clean slate for validation
     import csv_adapter
-    wb = csv_adapter.open_source(source)
+    wb = csv_adapter.open_source(source, source_name)
     for sheet in sheets:
         table, name = str(sheet["table_name"]).strip(), str(sheet.get("sheet_name") or "").strip()
         where = f"{source.name}[{name}]"
@@ -1013,11 +1013,15 @@ def _nullable(col) -> bool:
 
 
 def validate(config: Path, source: Path = None, prefix: str = None, target: str = None,
-             database: str = None, id_type: str = None) -> list:
+             database: str = None, id_type: str = None, source_name: str = None) -> list:
     """Check the configuration, and optionally one source workbook against it.
 
     Returns a list of Issue(severity, where, message); an empty list, or a list
     of warnings only, means executor.py can push this pair.
+
+    *source_name* overrides the CSV sheet name when the on-disk filename is a
+    content-addressed hash (e.g. uploaded files). Pass the original filename
+    stem so that `sheet_config.sheet_name` can match.
     """
     issues = []
     resolved = resolve_target(config, target, database, prefix, id_type)
@@ -1027,7 +1031,7 @@ def validate(config: Path, source: Path = None, prefix: str = None, target: str 
         issues.append(Issue("error", "sheet_config", "no active rows - nothing would be created"))
     _check_config(sheets, columns, resolved.prefix, issues)
     if source and not [i for i in issues if i.severity == "error"]:
-        _check_source(sheets, columns, source, issues)
+        _check_source(sheets, columns, source, issues, source_name)
     return issues
 
 

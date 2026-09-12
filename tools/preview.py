@@ -116,7 +116,8 @@ def control(config: Path, prefix: str = None, id_type: str = None) -> list:
     } for name, note, cols in CONTROL_TABLES]
 
 
-def previews(config: Path, source: Path, limit: int = DEFAULT_LIMIT) -> dict:
+def previews(config: Path, source: Path, limit: int = DEFAULT_LIMIT,
+             source_name: str = None) -> dict:
     """{table_name: {columns, rows, ...}} - the first `limit` loadable rows.
 
     Each row carries the cast value and the cell it came from, so the app can
@@ -125,7 +126,7 @@ def previews(config: Path, source: Path, limit: int = DEFAULT_LIMIT) -> dict:
     """
     sheets, columns = validator.read_config(config)
     import csv_adapter
-    wb = csv_adapter.open_source(source)
+    wb = csv_adapter.open_source(source, source_name)
     out = {}
     for sheet in sheets:
         name = str(sheet["table_name"]).strip()

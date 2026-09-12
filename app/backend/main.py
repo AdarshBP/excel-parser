@@ -1009,11 +1009,13 @@ def batch_push_upload(request: Request,
         total_rows = 0
         for name, path in saved:
             lines = []
+            sname = Path(name).stem if path.suffix.lower() == ".csv" else None
             try:
                 result = service.engine.executor.execute(
                     config, path, where.target, database, where.prefix,
                     schema_sql, 0, lines.append, where.id_type, strict=True,
-                    source_ref=f"upload:{name}", config_ref=config_ref)
+                    source_ref=f"upload:{name}", config_ref=config_ref,
+                    source_name=sname)
                 file_results.append({
                     "ref": name, "name": name, "status": "pushed",
                     "file_id": result.file_id, "rows": result.total,
@@ -1127,8 +1129,11 @@ def test_ref(body: dict, user: dict = auth.Me) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     import csv_adapter
+    sname = None
+    if path.suffix.lower() == ".csv" and sources.looks_like_upload(ref):
+        sname = Path(sources.upload_original_name(ref)).stem
     try:
-        wb = csv_adapter.open_source(path)
+        wb = csv_adapter.open_source(path, sname)
         sheets = wb.sheetnames
         wb.close()
     except Exception as exc:
