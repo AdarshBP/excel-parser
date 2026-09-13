@@ -154,11 +154,14 @@ Examples 07 and 08 must fail validation and exit 1 with nothing written.
   row with a computed value (`now`, `today`, `uuid`, `file_name`, `sequence`),
   `expr:<expression>` computes a value from other columns (e.g.
   `expr:({A} + {B}) * {C}`, `expr:{A} & " - " & {C}`; operators: `+`, `-`,
-  `*`, `/`, `&`, parentheses `()`, unary minus `-{X}`). NULL in arithmetic
-  → NULL (like SQL). `script` and `null_default` apply after the result is
-  cast. Expressions can reference other computed column names with
-  `{column_name}` syntax (two-pass: col/const/fn first, expr second).
-  Expression tokens are cached per load for performance.
+  `*`, `/`, `&`, parentheses `()`, unary minus `-{X}`),
+  `map:v1||v2||v3||...` assigns a different value to each row by position
+  (first data row gets `v1`, second gets `v2`, etc.; use `||` double-pipe
+  as separator; ideal for `key_value` blocks without a label column).
+  NULL in arithmetic → NULL (like SQL). `script` and `null_default` apply
+  after the result is cast. Expressions can reference other computed column
+  names with `{column_name}` syntax (two-pass: col/const/fn/map first,
+  expr second). Expression tokens are cached per load for performance.
 * **`row_filter`**: optional column in `sheet_config` — skip rows that
   don't match. Syntax: `col:D > 0`, `col:B = "Delivered"`,
   `col:A is_not_empty`. Operators: `=`, `!=`, `>`, `<`, `>=`, `<=`,

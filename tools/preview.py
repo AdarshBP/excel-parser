@@ -145,7 +145,8 @@ def previews(config: Path, source: Path, limit: int = DEFAULT_LIMIT,
         entry["range"] = [start, end]
 
         row_ctx = {"file_name": source.name,
-                   "_seq_key": f"_preview_{sheet['table_name']}"}
+                   "_seq_key": f"_preview_{sheet['table_name']}",
+                   "_data_start_row": start}
         # Parse where filter
         where_clause = str(sheet.get("row_filter") or "").strip()
         where_conditions = validator.parse_where(where_clause) if where_clause else []

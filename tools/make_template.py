@@ -144,11 +144,17 @@ COLUMN_HELP = [
      "    expr:-{D}                  (negate a value)\n"
      "    expr:{A} & \" - \" & {C}    (concatenate with separator)\n"
      "    expr:{D} * 0.18            (calculate 18% tax)\n\n"
+     "5. Positional map: 'map:v1||v2||v3||...' — assigns a different "
+     "value to each row by position. The first data row gets v1, the "
+     "second gets v2, and so on. Use || (double pipe) to separate values.\n"
+     "  Example: map:Name||Area||City||ID||GSTIN\n"
+     "  Ideal for key_value blocks where the source has no label column.\n"
+     "  If the map has fewer values than rows, extra rows get NULL.\n\n"
      "All results are cast to the column's data_type. 'script' and\n"
      "'null_default' apply after the expression result is cast.\n\n"
      "IMPORTANT: if the supplier inserts a new column, every letter after it "
      "shifts. Re-check all col: and expr: source_ref values when that happens.",
-     "col:<letter>, const:<value>, fn:<name>, or expr:<expression>",
+     "col:<letter>, const:<value>, fn:<name>, expr:<expression>, or map:v1||v2||...",
      "col:A"),
     ("source_header", "no",
      "The header text as printed in the source file — purely for documentation. "

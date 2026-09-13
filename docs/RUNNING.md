@@ -102,7 +102,7 @@ Exit code 0 means loadable, 1 means it is not. What it checks:
 | `table_name` / `column_name` are usable, unique, not reserved lineage names | `col:` letters are inside the used range |
 | `data_type` is one of the six supported types | every configured cell converts to its `data_type` |
 | `data_start_row` / `data_end_row` / `header_row` are sane whole numbers | rows that would be skipped for an empty `nullable = N` column |
-| `source_ref` is a valid reference (`col:`, `const:`, `fn:`, or `expr:`) | tables that would load 0 rows |
+| `source_ref` is a valid reference (`col:`, `const:`, `fn:`, `expr:`, or `map:`) | tables that would load 0 rows |
 | `row_filter` syntax is valid (if set) | |
 | `layout`, `nullable`, `is_key` hold allowed values | |
 | `target_config` names a real target, database, schema and prefix - and no credentials | |

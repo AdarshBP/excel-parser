@@ -190,6 +190,17 @@ def const_value(source_ref) -> str:
     return _ref_kind(source_ref)[1]
 
 
+def is_map_ref(source_ref) -> bool:
+    """True if source_ref is a 'map:v1||v2||...' positional mapping."""
+    return _ref_kind(source_ref)[0] == "map"
+
+
+def map_values(source_ref) -> list:
+    """'map:A||B||C' -> ['A', 'B', 'C']. Only call after is_map_ref()."""
+    payload = _ref_kind(source_ref)[1]
+    return [v.strip() for v in payload.split("||")]
+
+
 # ---- fn:<name> — computed values evaluated at load time ---------------------
 # Each entry: name -> (callable(context), compatible data_types).
 # context is a dict with optional keys: file_name, sequence (counter).
@@ -648,7 +659,8 @@ def column_letter(source_ref) -> str:
     letter = letter.strip().upper()
     if kind.strip().lower() != "col" or not letter.isalpha():
         raise ValueError(f"{text!r} is not a valid source_ref "
-                         f"(use col:<letter>, const:<value>, fn:<name>, or expr:<expression>)")
+                         f"(use col:<letter>, const:<value>, fn:<name>, "
+                         f"expr:<expression>, or map:v1||v2||...)")
     return letter
 
 
@@ -769,7 +781,12 @@ def _check_config(sheets, columns, prefix, issues) -> None:
                 if flag not in allowed:
                     issues.append(Issue("error", cwhere, f"{field} must be Y or N, not {flag!r}"))
 
-            if is_const_ref(col.get("source_ref")):
+            if is_map_ref(col.get("source_ref")):
+                vals = map_values(col.get("source_ref"))
+                if not vals or vals == [""]:
+                    issues.append(Issue("error", cwhere, "map: needs at least one value "
+                                                         "(e.g. map:Label1||Label2)"))
+            elif is_const_ref(col.get("source_ref")):
                 cv = const_value(col.get("source_ref"))
                 if not cv:
                     issues.append(Issue("error", cwhere, "const: value is empty"))
@@ -895,9 +912,19 @@ def _check_source(sheets, columns, source: Path, issues, source_name: str = None
                                                   f"(row {ws.max_row}) — this table will be empty"))
             continue
 
-        # kind: 'static' (const/fn), 'col', or 'expr'
+        # kind: 'static' (const/fn), 'col', 'expr', or 'map'
         cols = []        # (col_config, kind, letter_or_None, index_or_None, static_or_body)
         for col in columns.get(sheet["table_name"], []):
+            if is_map_ref(col.get("source_ref")):
+                vals = map_values(col.get("source_ref"))
+                row_count = end - start + 1
+                if len(vals) != row_count:
+                    issues.append(Issue("warning", f"{where}[{col['column_name']}]",
+                                        f"map: has {len(vals)} value(s) but the block has "
+                                        f"{row_count} row(s) ({start}-{end}). Extra values "
+                                        f"are ignored; missing positions get NULL."))
+                cols.append((col, "map", None, None, vals))
+                continue
             if is_const_ref(col.get("source_ref")):
                 cv = const_value(col.get("source_ref"))
                 cols.append((col, "static", None, None, cv))
@@ -954,6 +981,17 @@ def _check_source(sheets, columns, source: Path, issues, source_name: str = None
             for col, ckind, letter, index, extra in cols:
                 col_name = str(col.get("column_name", "")).strip()
                 dfmt = str(col.get("date_format") or "").strip() or None
+                if ckind == "map":
+                    idx = row_num - start
+                    raw = extra[idx] if idx < len(extra) else None
+                    try:
+                        v = cast(raw, str(col.get("data_type") or "text").strip().lower(), date_format=dfmt)
+                        values.append(v)
+                        computed_vals[col_name] = v
+                    except ValueError as exc:
+                        values.append(None)
+                        bad.append((col, f"map[{idx}]", exc))
+                    continue
                 if ckind == "static":
                     try:
                         v = cast(extra, str(col.get("data_type") or "text").strip().lower(), date_format=dfmt)

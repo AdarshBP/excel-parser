@@ -52,6 +52,7 @@ Every scenario the parser supports, and where to see it:
 | configuration errors caught before any write | 7 |
 | source/configuration mismatch caught before any write | 8 |
 | cross-table `references` (FK in the ER diagram) | 6 |
+| `map:` positional labels for key-value rows | 17 (`summary.field_name`) |
 | real-world settlement reports | 9 (Swiggy), 10 (Zomato), 11 (GrowthFalcons) |
 
 ---
@@ -1042,7 +1043,8 @@ postgres, database `excel_parser`, schema `kitchen_sink`, prefix `ks_`, id_type 
 `%d-%b-%Y` date_format, expr `{qty} * {unit_price}` with column name refs,
 `fn:sequence` (resets per table), `const:piece`.
 
-**summary** (3 columns): key_value layout, `trim` script, `fn:now`.
+**summary** (4 columns): key_value layout, `map:` positional labels
+(`field_name`), `trim` script, `fn:now`.
 
 **archive**: active=N — no table created, no data loaded.
 
@@ -1083,6 +1085,7 @@ Expected: **18 rows** (5 orders + 8 items + 5 summary), 0 errors, 4 warnings.
 | scripts (text) | trim, uppercase, titlecase, lowercase |
 | scripts (numeric) | round_2, clamp_0 |
 | scripts (date) | year_month |
+| source_ref map: | summary.field_name: positional labels for key_value rows |
 | key_value layout | summary table |
 | active=N | archive table — skipped entirely |
 | table_prefix | `ks_` on all tables |

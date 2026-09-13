@@ -251,11 +251,12 @@ def kitchen_sink() -> None:
 
     3 sheets: Orders (table, where-filtered), Items (table, FK to orders),
     Summary (key_value layout). One inactive block.
-    Covers: all 6 data types, all source_ref types (col/const/fn/expr),
+    Covers: all 6 data types, all source_ref types (col/const/fn/expr/map),
     all 5 fn: functions, expr with column name refs + parentheses + unary
     minus + NULL propagation, where filter, date_format, null_default,
     references (FK), is_key, scripts (text/numeric/date/guard), active=N,
-    key_value layout, table_prefix, db_schema, id_type=uuid.
+    key_value layout, map: positional labels, table_prefix, db_schema,
+    id_type=uuid.
     """
     folder = EXAMPLES / "17_kitchen_sink"
     # --- source workbook: 3 sheets ---
@@ -401,10 +402,11 @@ def kitchen_sink() -> None:
         # const on items
         ["items",     "const:piece", None,         "unit",        "text",     "Y", "N", 8,  None,        None,        None,     None,              "const: unit of measure",    None],
 
-        # ── summary table ── (key_value layout)
-        ["summary",   "col:A",       None,         "label",       "text",     "N", "N", 1,  None,        None,        None,     "trim",            "the key/label",             None],
-        ["summary",   "col:B",       None,         "value",       "text",     "Y", "N", 2,  None,        None,        None,     "trim",            "the value, kept as text",   None],
-        ["summary",   "fn:now",      None,         "captured_at", "timestamp","Y", "N", 3,  None,        None,        None,     None,              "when this was loaded",       None],
+        # ── summary table ── (key_value layout + map: positional labels)
+        ["summary",   "map:Title||Date||Currency||Region||Order Count", None, "field_name", "text", "N", "N", 1, None, None, None, None, "map: user-provided labels", None],
+        ["summary",   "col:A",       None,         "label",       "text",     "N", "N", 2,  None,        None,        None,     "trim",            "the key/label from source", None],
+        ["summary",   "col:B",       None,         "value",       "text",     "Y", "N", 3,  None,        None,        None,     "trim",            "the value, kept as text",   None],
+        ["summary",   "fn:now",      None,         "captured_at", "timestamp","Y", "N", 4,  None,        None,        None,     None,              "when this was loaded",       None],
 
         # ── archive table ── (active=N, won't be created or loaded)
         ["archive",   "col:A",       "Old ID",     "old_id",      "text",     "N", "Y", 1,  None,        None,        None,     None,              "inactive — skipped entirely", None],

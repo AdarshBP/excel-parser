@@ -143,7 +143,7 @@ sales      | col:D      | Amount        | amount       | numeric   | Y        | 
 | Column | Required | Description |
 |---|---|---|
 | `table_name` | **yes** | Must match a `table_name` in `sheet_config` |
-| `source_ref` | **yes** | Where to get the value. Column: `col:A`, `col:B`. Constant: `const:<value>`. Function: `fn:now`, `fn:today`. Expression: `expr:{A} + {B}`, `expr:{A} & " " & {C}`. See "How to determine source_ref" below. |
+| `source_ref` | **yes** | Where to get the value. Column: `col:A`, `col:B`. Constant: `const:<value>`. Function: `fn:now`, `fn:today`. Expression: `expr:{A} + {B}`. Positional map: `map:v1||v2||v3`. See "How to determine source_ref" below. |
 | `source_header` | no | Header text as printed in the source file. Documentation only — the parser reads by position (`source_ref`), never by header text |
 | `column_name` | **yes** | Database column name. Lowercase `snake_case`, unique within the table, max 63 chars. Must not be `file_id`, `file_name`, `file_sha256`, `source_ref`, `sheet_name`, `source_row_num`, or `<table_name>_id` |
 | `data_type` | **yes** | One of: `text`, `numeric`, `integer`, `date`, `timestamp`, `boolean` |
@@ -161,7 +161,7 @@ sales      | col:D      | Amount        | amount       | numeric   | Y        | 
 
 ## How to determine `source_ref`
 
-`source_ref` supports three formats:
+`source_ref` supports five formats:
 
 ### 1. Column reference — `col:<letter>`
 
@@ -251,6 +251,39 @@ result after it is cast to `data_type`, just like any other column.
 - `expr:{A} & " " & fn:today` — append today's date to a text value
 
 The result is cast to the column's `data_type` like any other value.
+
+### 5. Positional map — `map:v1||v2||v3||...`
+
+Assigns a different value to each row by position. The first data row
+gets `v1`, the second gets `v2`, and so on. Use `||` (double pipe) to
+separate values.
+
+Ideal for `key_value` blocks where the source has no label column — you
+provide the labels yourself.
+
+**Example:** A source sheet has restaurant info in rows 5–9 of column A,
+but no label column:
+
+```
+Row 5:  Dilli Darbar
+Row 6:  Whitefield
+Row 7:  Bangalore
+Row 8:  Rest. ID - 4780
+Row 9:  GSTIN - 29ABNFM9601R1Z9
+```
+
+Configuration:
+
+```
+source_ref: map:Restaurant Name||Area||City||Restaurant ID||GSTIN
+```
+
+Result: row 5 → "Restaurant Name", row 6 → "Area", row 7 → "City", etc.
+
+- If the map has fewer values than rows, extra rows get NULL.
+- If the map has more values than rows, extra values are ignored (a
+  warning is emitted during validation).
+- Values cannot contain `||` (the delimiter).
 
 ---
 

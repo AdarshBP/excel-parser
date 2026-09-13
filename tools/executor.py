@@ -171,7 +171,8 @@ def execute(config: Path, source: Path, target: str = None, database=None, prefi
                       + ") VALUES (" + ", ".join([ph] * len(all_col_names)) + ")")
             loaded = 0
             row_ctx = {"file_name": source.name,
-                        "_seq_key": str(sheet["table_name"]).strip()}
+                        "_seq_key": str(sheet["table_name"]).strip(),
+                        "_data_start_row": start}
             # Parse where filter
             import validator as validmod
             where_clause = str(sheet.get("row_filter") or "").strip()

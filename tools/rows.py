@@ -62,7 +62,12 @@ def build_row(ws, cols, row_num: int, context=None) -> RowRead:
             # Defer to pass 2 (slots already pre-allocated as None)
             expr_indices.append((i, col))
             continue
-        if validator.is_const_ref(col["source_ref"]):
+        if validator.is_map_ref(col["source_ref"]):
+            vals = validator.map_values(col["source_ref"])
+            idx = row_num - ctx.get("_data_start_row", row_num)
+            raw = vals[idx] if idx < len(vals) else None
+            cell_ref = f"map[{idx}]"
+        elif validator.is_const_ref(col["source_ref"]):
             raw = validator.const_value(col["source_ref"])
             cell_ref = f"const:{raw}"
         elif validator.is_fn_ref(col["source_ref"]):
