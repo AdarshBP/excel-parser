@@ -37,10 +37,10 @@ TARGET_SETTINGS = ("target", "database", "db_schema", "table_prefix", "id_type")
 ID_TYPES = ("integer", "uuid")
 
 SHEET_FIELDS = ("table_name", "sheet_name", "layout", "header_row",
-                "data_start_row", "data_end_row", "active", "notes")
+                "data_start_row", "data_end_row", "row_filter", "active", "notes")
 COLUMN_FIELDS = ("table_name", "source_ref", "source_header", "column_name",
-                 "data_type", "nullable", "is_key", "transform", "column_order",
-                 "references", "null_default")
+                 "data_type", "nullable", "is_key", "column_order",
+                 "references", "null_default", "date_format")
 LAYOUTS = ("table", "key_value")
 LINEAGE = ("file_id", "sheet_name", "source_row_num")
 
@@ -171,13 +171,496 @@ def resolve_target(config: Path, target=None, database=None, prefix=None,
     )
 
 
+def _ref_kind(source_ref) -> tuple:
+    """Parse 'kind:payload' -> (kind, payload). Returns ('', '') on bad input."""
+    text = str(source_ref or "").strip()
+    kind, sep, payload = text.partition(":")
+    if not sep:
+        return ("", "")
+    return (kind.strip().lower(), payload.strip())
+
+
+def is_const_ref(source_ref) -> bool:
+    """True if source_ref is a 'const:<value>' constant."""
+    return _ref_kind(source_ref)[0] == "const"
+
+
+def const_value(source_ref) -> str:
+    """'const:adarsh' -> 'adarsh'. Only call after is_const_ref() returns True."""
+    return _ref_kind(source_ref)[1]
+
+
+def is_map_ref(source_ref) -> bool:
+    """True if source_ref is a 'map:v1||v2||...' positional mapping."""
+    return _ref_kind(source_ref)[0] == "map"
+
+
+def map_values(source_ref) -> list:
+    """'map:A||B||C' -> ['A', 'B', 'C']. Only call after is_map_ref()."""
+    payload = _ref_kind(source_ref)[1]
+    return [v.strip() for v in payload.split("||")]
+
+
+# ---- fn:<name> — computed values evaluated at load time ---------------------
+# Each entry: name -> (callable(context), compatible data_types).
+# context is a dict with optional keys: file_name, sequence (counter).
+# Simple functions ignore the context; file_name/sequence use it.
+
+import re
+import uuid as _uuid
+from datetime import date, datetime
+
+_sequence_counters = {}  # table_name -> next value
+
+
+def _fn_now(ctx):
+    return datetime.now()
+
+
+def _fn_today(ctx):
+    return date.today()
+
+
+def _fn_uuid(ctx):
+    return str(_uuid.uuid4())
+
+
+def _fn_file_name(ctx):
+    return ctx.get("file_name", "")
+
+
+def _fn_sequence(ctx):
+    key = ctx.get("_seq_key", "_default")
+    _sequence_counters[key] = _sequence_counters.get(key, 0) + 1
+    return _sequence_counters[key]
+
+
+def fn_reset_sequence(table_name: str = None) -> None:
+    """Reset sequence counters. Call before a new load."""
+    if table_name:
+        _sequence_counters.pop(table_name, None)
+    else:
+        _sequence_counters.clear()
+
+
+FN_REGISTRY = {
+    "now":       (_fn_now,       {"timestamp", "text"}),
+    "today":     (_fn_today,     {"date", "text"}),
+    "uuid":      (_fn_uuid,      {"text"}),
+    "file_name": (_fn_file_name, {"text"}),
+    "sequence":  (_fn_sequence,  {"integer", "numeric", "text"}),
+}
+
+
+def is_fn_ref(source_ref) -> bool:
+    """True if source_ref is a 'fn:<name>' computed reference."""
+    return _ref_kind(source_ref)[0] == "fn"
+
+
+def fn_name(source_ref) -> str:
+    """'fn:now' -> 'now'. Only call after is_fn_ref() returns True."""
+    return _ref_kind(source_ref)[1]
+
+
+def fn_evaluate(source_ref, context=None):
+    """Call the registered function and return its value."""
+    name = fn_name(source_ref)
+    func, _ = FN_REGISTRY[name]
+    return func(context or {})
+
+
+# ---- expr:<expression> — computed from other columns -----------------------
+# Tokens: {A} = column ref, const:value, fn:name, "literal", number
+# Operators: + - * / (numeric), & (string concatenation)
+# Parentheses: ( ) for grouping
+# Unary minus: -{A}, -(expr)
+
+_EXPR_TOKEN = re.compile(
+    r'\{([A-Za-z_][A-Za-z0-9_]*)\}'  # {A}, {AM} (col letter) or {column_name} (name ref)
+    r'|fn:(\w+)'             # fn:now, fn:today
+    r'|const:([^&+\-*/\s()]+)'  # const:adarsh, const:100
+    r'|"([^"]*)"'            # "literal string"
+    r"|'([^']*)'"             # 'literal string'
+    r'|(\d+(?:\.\d+)?)'      # numeric literal
+    r'|([&+\-*/()])'         # operator or parenthesis
+)
+
+# Cache: expression body -> parsed tokens
+_expr_cache = {}
+
+
+def is_expr_ref(source_ref) -> bool:
+    """True if source_ref is an 'expr:...' expression."""
+    return _ref_kind(source_ref)[0] == "expr"
+
+
+def expr_body(source_ref) -> str:
+    """'expr:{A} + {B}' -> '{A} + {B}'."""
+    return _ref_kind(source_ref)[1]
+
+
+def parse_expr(body: str) -> list:
+    """Tokenize an expression body into a list of (type, value) pairs.
+
+    Types: 'col', 'fn', 'const', 'literal', 'number', 'op', 'lparen', 'rparen'.
+    Raises ValueError on unparseable content. Results are cached.
+    """
+    if body in _expr_cache:
+        return _expr_cache[body]
+    tokens = []
+    pos = 0
+    text = body.strip()
+    while pos < len(text):
+        if text[pos].isspace():
+            pos += 1
+            continue
+        m = _EXPR_TOKEN.match(text, pos)
+        if not m:
+            raise ValueError(f"unexpected character at position {pos}: {text[pos:]!r}")
+        if m.group(1) is not None:
+            ref = m.group(1)
+            # All uppercase letters = Excel column (A, AM); otherwise = column name
+            if ref.isalpha() and ref.isupper():
+                tokens.append(("col", ref))
+            else:
+                tokens.append(("ref", ref))  # column name reference
+        elif m.group(2) is not None:
+            tokens.append(("fn", m.group(2)))
+        elif m.group(3) is not None:
+            tokens.append(("const", m.group(3)))
+        elif m.group(4) is not None:
+            tokens.append(("literal", m.group(4)))
+        elif m.group(5) is not None:
+            tokens.append(("literal", m.group(5)))
+        elif m.group(6) is not None:
+            tokens.append(("number", float(m.group(6))))
+        elif m.group(7) is not None:
+            ch = m.group(7)
+            if ch == "(":
+                tokens.append(("lparen", "("))
+            elif ch == ")":
+                tokens.append(("rparen", ")"))
+            else:
+                tokens.append(("op", ch))
+        pos = m.end()
+    _expr_cache[body] = tokens
+    return tokens
+
+
+def validate_expr(body: str) -> list:
+    """Parse and validate an expression. Returns a list of error strings (empty = OK)."""
+    errors = []
+    try:
+        tokens = parse_expr(body)
+    except ValueError as exc:
+        return [str(exc)]
+    if not tokens:
+        return ["expression is empty"]
+    for kind, value in tokens:
+        if kind == "fn" and value not in FN_REGISTRY:
+            errors.append(f"unknown function 'fn:{value}' in expression. "
+                          f"Available: {', '.join(sorted(FN_REGISTRY))}")
+    # Check balanced parentheses
+    depth = 0
+    for kind, value in tokens:
+        if kind == "lparen":
+            depth += 1
+        elif kind == "rparen":
+            depth -= 1
+            if depth < 0:
+                errors.append("unmatched closing parenthesis ')'")
+                break
+    if depth > 0:
+        errors.append(f"unmatched opening parenthesis — {depth} unclosed '('")
+    return errors
+
+
+def expr_column_refs(body: str) -> list:
+    """Return the column letters referenced by an expression, e.g. ['A', 'B']."""
+    try:
+        tokens = parse_expr(body)
+    except ValueError:
+        return []
+    return [value for kind, value in tokens if kind in ("col", "ref")]
+
+
+def evaluate_expr(body: str, cell_reader, context=None) -> object:
+    """Evaluate an expression given a cell_reader(letter) -> raw value function.
+
+    Uses recursive descent to handle parentheses and operator precedence.
+    NULL propagation: arithmetic with NULL -> NULL (like SQL).
+    Returns the computed value (number, string, or None).
+    """
+    tokens = parse_expr(body)
+    ctx = context or {}
+    pos = [0]  # mutable index for recursive descent
+
+    def _resolve():
+        """Resolve the next operand (handles unary minus and parentheses)."""
+        if pos[0] >= len(tokens):
+            raise ValueError("unexpected end of expression")
+        kind, value = tokens[pos[0]]
+        # Unary minus
+        if kind == "op" and value == "-":
+            pos[0] += 1
+            operand = _resolve()
+            if operand is None:
+                return None
+            n = _to_num(operand)
+            if n is None:
+                raise ValueError(f"unary minus on non-numeric value: -{operand!r}")
+            return -n
+        # Parenthesized sub-expression
+        if kind == "lparen":
+            pos[0] += 1
+            result = _parse_concat()
+            if pos[0] < len(tokens) and tokens[pos[0]][0] == "rparen":
+                pos[0] += 1
+            return result
+        # Operands
+        pos[0] += 1
+        if kind in ("col", "ref"):
+            return cell_reader(value)
+        if kind == "fn":
+            func, _ = FN_REGISTRY[value]
+            return func(ctx)
+        if kind in ("const", "literal"):
+            return value
+        if kind == "number":
+            return value
+        raise ValueError(f"unexpected token: {kind} {value!r}")
+
+    def _parse_muldiv():
+        """Parse * and / (highest precedence among binary ops)."""
+        left = _resolve()
+        while pos[0] < len(tokens) and tokens[pos[0]] == ("op", "*") or \
+              pos[0] < len(tokens) and tokens[pos[0]] == ("op", "/"):
+            op = tokens[pos[0]][1]
+            pos[0] += 1
+            right = _resolve()
+            left = _apply_op(left, op, right)
+        return left
+
+    def _parse_addsub():
+        """Parse + and - (medium precedence)."""
+        left = _parse_muldiv()
+        while pos[0] < len(tokens) and tokens[pos[0]] == ("op", "+") or \
+              pos[0] < len(tokens) and tokens[pos[0]] == ("op", "-"):
+            op = tokens[pos[0]][1]
+            pos[0] += 1
+            right = _parse_muldiv()
+            left = _apply_op(left, op, right)
+        return left
+
+    def _parse_concat():
+        """Parse & (lowest precedence)."""
+        left = _parse_addsub()
+        while pos[0] < len(tokens) and tokens[pos[0]] == ("op", "&"):
+            pos[0] += 1
+            right = _parse_addsub()
+            left = _apply_op(left, "&", right)
+        return left
+
+    def _apply_op(left, op, right):
+        if op == "&":
+            ls = str(left) if left is not None else ""
+            rs = str(right) if right is not None else ""
+            return ls + rs
+        # NULL propagation: arithmetic with NULL -> NULL
+        ln = _to_num(left)
+        rn = _to_num(right)
+        if ln is None or rn is None:
+            return None
+        if op == "+":
+            return ln + rn
+        if op == "-":
+            return ln - rn
+        if op == "*":
+            return ln * rn
+        if op == "/":
+            if rn == 0:
+                return None
+            return ln / rn
+        raise ValueError(f"unknown operator: {op!r}")
+
+    def _to_num(value):
+        if isinstance(value, (int, float)):
+            return value
+        if value is None:
+            return None
+        try:
+            return float(str(value))
+        except (ValueError, TypeError):
+            return None
+
+    result = _parse_concat()
+    return result
+
+
+# ---- row_filter — row-level filtering in sheet_config ----------------------
+# Syntax: col:LETTER op value [AND/OR col:LETTER op value ...]
+# Operators: =, !=, >, <, >=, <=, contains, not_contains, is_empty, is_not_empty
+# Value: "text" or number. Comparisons are case-insensitive for text.
+
+_WHERE_CONDITION = re.compile(
+    r'col:([A-Z]+)'             # col:A, col:AM — same as source_ref
+    r'\s*(=|!=|>=|<=|>|<|contains|not_contains|is_empty|is_not_empty)'  # operator
+    r'(?:\s+"([^"]*)"'          # "text value"
+    r"|\\s+'([^']*)'"           # 'text value'
+    r'|\s+(\d+(?:\.\d+)?))?'   # numeric value (optional for is_empty/is_not_empty)
+)
+
+
+def parse_where(where_str: str) -> list:
+    """Parse a where clause into a list of (col_letter, op, value, combiner) tuples.
+
+    combiner is 'AND' or 'OR' (default AND between conditions).
+    Returns [] for empty/None input.
+    """
+    text = str(where_str or "").strip()
+    if not text:
+        return []
+    conditions = []
+    # Split on AND/OR (case insensitive)
+    parts = re.split(r'\s+(AND|OR)\s+', text, flags=re.IGNORECASE)
+    combiners = []
+    filter_parts = []
+    for i, part in enumerate(parts):
+        if part.upper() in ("AND", "OR"):
+            combiners.append(part.upper())
+        else:
+            filter_parts.append(part.strip())
+    # Default combiner is AND
+    for i, part in enumerate(filter_parts):
+        m = _WHERE_CONDITION.match(part)
+        if not m:
+            raise ValueError(f"cannot parse where condition: {part!r}")
+        col_letter = m.group(1)
+        op = m.group(2)
+        if m.group(3) is not None:
+            value = m.group(3)
+        elif m.group(4) is not None:
+            value = m.group(4)
+        elif m.group(5) is not None:
+            value = float(m.group(5))
+        else:
+            value = None  # for is_empty / is_not_empty
+        combiner = combiners[i - 1] if i > 0 and i - 1 < len(combiners) else "AND"
+        conditions.append((col_letter, op, value, combiner))
+    return conditions
+
+
+def validate_where(where_str: str) -> list:
+    """Validate a where clause. Returns list of error strings (empty = OK)."""
+    try:
+        conditions = parse_where(where_str)
+    except ValueError as exc:
+        return [str(exc)]
+    errors = []
+    for col_letter, op, value, _ in conditions:
+        if op in ("is_empty", "is_not_empty") and value is not None:
+            errors.append(f"{op} does not take a value")
+        if op not in ("is_empty", "is_not_empty") and value is None:
+            errors.append(f"{op} requires a value (e.g. {{A}} {op} \"text\" or {{A}} {op} 123)")
+    return errors
+
+
+def evaluate_where(conditions: list, cell_reader) -> bool:
+    """Evaluate parsed where conditions. cell_reader(letter) -> raw cell value.
+
+    Returns True if the row should be loaded, False to skip.
+    """
+    if not conditions:
+        return True
+    results = []
+    combiners = []
+    for col_letter, op, value, combiner in conditions:
+        raw = cell_reader(col_letter)
+        result = _eval_condition(raw, op, value)
+        results.append(result)
+        combiners.append(combiner)
+    # Evaluate: AND has higher precedence than OR
+    # Group by OR, then AND within each group
+    final = results[0]
+    for i in range(1, len(results)):
+        if combiners[i] == "OR":
+            final = final or results[i]
+        else:  # AND
+            final = final and results[i]
+    return final
+
+
+def _eval_condition(raw, op, value) -> bool:
+    """Evaluate a single condition."""
+    if op == "is_empty":
+        return raw is None or str(raw).strip() == ""
+    if op == "is_not_empty":
+        return raw is not None and str(raw).strip() != ""
+    raw_str = str(raw).strip().lower() if raw is not None else ""
+    val_str = str(value).strip().lower() if value is not None else ""
+    if op == "contains":
+        return val_str in raw_str
+    if op == "not_contains":
+        return val_str not in raw_str
+    if op == "=":
+        # Try numeric comparison first
+        rn = _try_num(raw)
+        vn = _try_num(value)
+        if rn is not None and vn is not None:
+            return rn == vn
+        return raw_str == val_str
+    if op == "!=":
+        rn = _try_num(raw)
+        vn = _try_num(value)
+        if rn is not None and vn is not None:
+            return rn != vn
+        return raw_str != val_str
+    # Numeric comparisons: >, <, >=, <=
+    rn = _try_num(raw)
+    vn = _try_num(value)
+    if rn is None or vn is None:
+        return False  # can't compare non-numeric
+    if op == ">":
+        return rn > vn
+    if op == "<":
+        return rn < vn
+    if op == ">=":
+        return rn >= vn
+    if op == "<=":
+        return rn <= vn
+    return False
+
+
+def _try_num(value):
+    """Try to convert to float, return None on failure."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    if value is None:
+        return None
+    try:
+        return float(str(value))
+    except (ValueError, TypeError):
+        return None
+
+
+def where_column_refs(where_str: str) -> list:
+    """Return column letters referenced in a where clause."""
+    try:
+        conditions = parse_where(where_str)
+    except ValueError:
+        return []
+    return [col for col, _, _, _ in conditions]
+
+
 def column_letter(source_ref) -> str:
     """'col:AM' -> 'AM'. Raises ValueError on any other shape."""
     text = str(source_ref or "").strip()
     kind, _, letter = text.partition(":")
     letter = letter.strip().upper()
     if kind.strip().lower() != "col" or not letter.isalpha():
-        raise ValueError(f"{text!r} is not a 'col:<letter>' reference")
+        raise ValueError(f"{text!r} is not a valid source_ref "
+                         f"(use col:<letter>, const:<value>, fn:<name>, "
+                         f"expr:<expression>, or map:v1||v2||...)")
     return letter
 
 
@@ -254,8 +737,14 @@ def _check_config(sheets, columns, prefix, issues) -> None:
             issues.append(Issue("warning", where, f"header_row {header} is inside the data range "
                                                   f"- row {start} onwards is read as data"))
         if not end:
-            issues.append(Issue("warning", where, "no data_end_row - reading to the last used row; "
-                                                  "set it if a totals row or another block follows"))
+            issues.append(Issue("warning", where, "No end row set — reads to the last row. "
+                                                  "Set data_end_row if the sheet has totals or notes below the data."))
+
+        where_clause = str(sheet.get("row_filter") or "").strip()
+        if where_clause:
+            errs = validate_where(where_clause)
+            for err in errs:
+                issues.append(Issue("error", where, f"row_filter: {err}"))
 
         cols = columns.get(sheet["table_name"], [])
         if not cols:
@@ -292,15 +781,46 @@ def _check_config(sheets, columns, prefix, issues) -> None:
                 if flag not in allowed:
                     issues.append(Issue("error", cwhere, f"{field} must be Y or N, not {flag!r}"))
 
-            try:
-                letter = column_letter(col.get("source_ref"))
-            except ValueError as exc:
-                issues.append(Issue("error", cwhere, str(exc)))
-                continue
-            if letter in seen_refs:
-                issues.append(Issue("warning", cwhere, f"col:{letter} is already mapped to "
-                                                       f"{seen_refs[letter]} - the cell is stored twice"))
-            seen_refs.setdefault(letter, name)
+            if is_map_ref(col.get("source_ref")):
+                vals = map_values(col.get("source_ref"))
+                if not vals or vals == [""]:
+                    issues.append(Issue("error", cwhere, "map: needs at least one value "
+                                                         "(e.g. map:Label1||Label2)"))
+            elif is_const_ref(col.get("source_ref")):
+                cv = const_value(col.get("source_ref"))
+                if not cv:
+                    issues.append(Issue("error", cwhere, "const: value is empty"))
+            elif is_fn_ref(col.get("source_ref")):
+                fname = fn_name(col.get("source_ref"))
+                if fname not in FN_REGISTRY:
+                    issues.append(Issue("error", cwhere,
+                                        f"unknown function 'fn:{fname}'. "
+                                        f"Available: {', '.join(sorted(FN_REGISTRY))}"))
+                else:
+                    _, compatible = FN_REGISTRY[fname]
+                    if dtype not in compatible:
+                        issues.append(Issue("error", cwhere,
+                                            f"fn:{fname} produces a value compatible with "
+                                            f"{', '.join(sorted(compatible))}, not {dtype!r}"))
+            elif is_expr_ref(col.get("source_ref")):
+                body = expr_body(col.get("source_ref"))
+                errs = validate_expr(body)
+                for err in errs:
+                    issues.append(Issue("error", cwhere, f"expr: {err}"))
+                for letter in expr_column_refs(body):
+                    if letter in seen_refs:
+                        pass  # OK — expressions *should* reference other columns
+                    seen_refs.setdefault(letter, name)
+            else:
+                try:
+                    letter = column_letter(col.get("source_ref"))
+                except ValueError as exc:
+                    issues.append(Issue("error", cwhere, str(exc)))
+                    continue
+                if letter in seen_refs:
+                    issues.append(Issue("warning", cwhere, f"col:{letter} is already mapped to "
+                                                           f"{seen_refs[letter]} - the cell is stored twice"))
+                seen_refs.setdefault(letter, name)
 
             if col.get("column_order") in (None, ""):
                 issues.append(Issue("warning", cwhere, "column_order is empty - ordering falls back to 0"))
@@ -328,6 +848,25 @@ def _check_config(sheets, columns, prefix, issues) -> None:
                     issues.append(Issue("error", cwhere,
                                         f"null_default {nd!r} is not a valid boolean (0/1/true/false)"))
 
+            dfmt = str(col.get("date_format") or "").strip()
+            if dfmt:
+                if dtype not in ("date", "timestamp"):
+                    issues.append(Issue("warning", cwhere,
+                                        f"date_format is set but data_type is {dtype!r}, "
+                                        f"not date or timestamp — it will be ignored"))
+                else:
+                    # Validate the format string with a test date
+                    import datetime as _dt
+                    try:
+                        _dt.datetime.strptime("01/01/2026", dfmt)
+                    except ValueError:
+                        try:
+                            _dt.datetime.strptime("2026-01-01", dfmt)
+                        except ValueError:
+                            issues.append(Issue("warning", cwhere,
+                                                f"date_format {dfmt!r} may not match common dates "
+                                                f"— verify it parses your source values correctly"))
+
     for table in columns:
         if str(table).strip() not in seen_tables:
             issues.append(Issue("warning", f"column_config[{table}]",
@@ -350,16 +889,17 @@ def _positive_int(value, where, field, issues, required):
     return number
 
 
-def _check_source(sheets, columns, source: Path, issues) -> None:
+def _check_source(sheets, columns, source: Path, issues, source_name: str = None) -> None:
     """Dry run of the load: every configured cell is read and cast, nothing is written."""
+    fn_reset_sequence()  # clean slate for validation
     import csv_adapter
-    wb = csv_adapter.open_source(source)
+    wb = csv_adapter.open_source(source, source_name)
     for sheet in sheets:
         table, name = str(sheet["table_name"]).strip(), str(sheet.get("sheet_name") or "").strip()
         where = f"{source.name}[{name}]"
         if name not in wb.sheetnames:
-            issues.append(Issue("error", where, f"worksheet is missing - table {table} cannot be loaded "
-                                                f"(tabs present: {', '.join(wb.sheetnames)})"))
+            issues.append(Issue("error", where, f"Sheet \"{name}\" not found in the source file. "
+                                                f"Available sheets: {', '.join(wb.sheetnames)}"))
             continue
         ws = wb[name]
         try:
@@ -368,12 +908,48 @@ def _check_source(sheets, columns, source: Path, issues) -> None:
             continue                                    # already reported by _check_config
         end = int(sheet["data_end_row"]) if sheet.get("data_end_row") else ws.max_row
         if start > ws.max_row:
-            issues.append(Issue("warning", where, f"data_start_row {start} is past the last used row "
-                                                  f"{ws.max_row} - {table} would load 0 rows"))
+            issues.append(Issue("warning", where, f"Start row {start} is past the last row in the sheet "
+                                                  f"(row {ws.max_row}) — this table will be empty"))
             continue
 
-        cols = []
+        # kind: 'static' (const/fn), 'col', 'expr', or 'map'
+        cols = []        # (col_config, kind, letter_or_None, index_or_None, static_or_body)
         for col in columns.get(sheet["table_name"], []):
+            if is_map_ref(col.get("source_ref")):
+                vals = map_values(col.get("source_ref"))
+                row_count = end - start + 1
+                if len(vals) != row_count:
+                    issues.append(Issue("warning", f"{where}[{col['column_name']}]",
+                                        f"map: has {len(vals)} value(s) but the block has "
+                                        f"{row_count} row(s) ({start}-{end}). Extra values "
+                                        f"are ignored; missing positions get NULL."))
+                cols.append((col, "map", None, None, vals))
+                continue
+            if is_const_ref(col.get("source_ref")):
+                cv = const_value(col.get("source_ref"))
+                cols.append((col, "static", None, None, cv))
+                continue
+            if is_fn_ref(col.get("source_ref")):
+                _ctx = {"file_name": source.name, "_seq_key": f"_validate_{table}"}
+                cols.append((col, "static", None, None, fn_evaluate(col.get("source_ref"), _ctx)))
+                continue
+            if is_expr_ref(col.get("source_ref")):
+                body = expr_body(col.get("source_ref"))
+                # Check that referenced Excel columns are within range
+                # (column name refs are resolved at eval time, not here)
+                try:
+                    tokens = parse_expr(body)
+                except ValueError:
+                    tokens = []
+                for kind, ref_letter in tokens:
+                    if kind == "col":  # Excel column letter only
+                        ref_idx = column_index_from_string(ref_letter)
+                        if ref_idx > ws.max_column:
+                            issues.append(Issue("error", f"{where}!{ref_letter}",
+                                                f"Column {ref_letter} (referenced in expr for "
+                                                f"\"{col['column_name']}\") is beyond the data"))
+                cols.append((col, "expr", None, None, body))
+                continue
             try:
                 letter = column_letter(col.get("source_ref"))
             except ValueError:
@@ -381,18 +957,70 @@ def _check_source(sheets, columns, source: Path, issues) -> None:
             index = column_index_from_string(letter)
             if index > ws.max_column:
                 issues.append(Issue("error", f"{where}!{letter}",
-                                    f"column {letter} is past the last used column - "
-                                    f"{table}.{col['column_name']} would always be empty"))
+                                    f"Column {letter} (\"{col['column_name']}\") is beyond the "
+                                    f"data in the sheet — the source file may have fewer columns than expected"))
                 continue
-            cols.append((col, letter, index))
+            cols.append((col, "col", letter, index, None))
+
+        # Parse where filter
+        where_clause = str(sheet.get("row_filter") or "").strip()
+        where_conditions = parse_where(where_clause) if where_clause else []
+        filtered = 0
 
         rows = skipped = 0
         for row_num in range(start, min(end, ws.max_row) + 1):
+            # Apply where filter
+            if where_conditions:
+                def _where_reader(ltr, _ws=ws, _row=row_num):
+                    return _ws.cell(_row, column_index_from_string(ltr)).value
+                if not evaluate_where(where_conditions, _where_reader):
+                    filtered += 1
+                    continue
             values, bad = [], []
-            for col, letter, index in cols:
+            computed_vals = {}
+            for col, ckind, letter, index, extra in cols:
+                col_name = str(col.get("column_name", "")).strip()
+                dfmt = str(col.get("date_format") or "").strip() or None
+                if ckind == "map":
+                    idx = row_num - start
+                    raw = extra[idx] if idx < len(extra) else None
+                    try:
+                        v = cast(raw, str(col.get("data_type") or "text").strip().lower(), date_format=dfmt)
+                        values.append(v)
+                        computed_vals[col_name] = v
+                    except ValueError as exc:
+                        values.append(None)
+                        bad.append((col, f"map[{idx}]", exc))
+                    continue
+                if ckind == "static":
+                    try:
+                        v = cast(extra, str(col.get("data_type") or "text").strip().lower(), date_format=dfmt)
+                        values.append(v)
+                        computed_vals[col_name] = v
+                    except ValueError as exc:
+                        values.append(None)
+                        bad.append((col, f"const:{extra}", exc))
+                    continue
+                if ckind == "expr":
+                    def _reader(ref, _ws=ws, _row=row_num, _computed=computed_vals):
+                        if ref in _computed:
+                            return _computed[ref]
+                        return _ws.cell(_row, column_index_from_string(ref)).value
+                    _ctx = {"file_name": source.name, "_seq_key": f"_validate_{table}"}
+                    try:
+                        raw = evaluate_expr(extra, _reader, _ctx)
+                        v = cast(raw, str(col.get("data_type") or "text").strip().lower(), date_format=dfmt)
+                        values.append(v)
+                        computed_vals[col_name] = v
+                    except ValueError as exc:
+                        values.append(None)
+                        bad.append((col, "expr", exc))
+                    continue
                 raw = ws.cell(row_num, index).value
                 try:
-                    values.append(cast(raw, str(col.get("data_type") or "text").strip().lower()))
+                    v = cast(raw, str(col.get("data_type") or "text").strip().lower(), date_format=dfmt)
+                    values.append(v)
+                    computed_vals[col_name] = v
                 except ValueError as exc:
                     values.append(None)
                     bad.append((col, letter, exc))
@@ -401,21 +1029,21 @@ def _check_source(sheets, columns, source: Path, issues) -> None:
             for col, letter, exc in bad:
                 severity = "warning" if _nullable(col) else "error"
                 issues.append(Issue(severity, f"{where}!{letter}{row_num}",
-                                    f"{exc} for {table}.{col['column_name']} "
-                                    f"({col.get('data_type')}) - "
-                                    + ("stored as NULL" if severity == "warning"
-                                       else "the column is nullable = N, so the row is skipped")))
-            required = [col["column_name"] for (col, _, _), value in zip(cols, values)
+                                    f"Column \"{col['column_name']}\" — value doesn't match "
+                                    f"type \"{col.get('data_type')}\" ({exc}). "
+                                    + ("Stored as empty." if severity == "warning"
+                                       else "This column is required, so the row is skipped.")))
+            required = [col["column_name"] for (col, *_), value in zip(cols, values)
                         if value is None and not _nullable(col)]
             if required:
                 skipped += 1
                 issues.append(Issue("warning", f"{where}!{row_num}",
-                                    f"empty required column(s) {', '.join(required)} - row is skipped"))
+                                    f"Row {row_num} skipped — required column(s) are empty: {', '.join(required)}"))
                 continue
             rows += 1
         if not rows:
-            issues.append(Issue("warning", where, f"{table} would load 0 rows from {name}!{start}-{end}"
-                                                  + (f" ({skipped} skipped)" if skipped else "")))
+            issues.append(Issue("warning", where, f"Empty section — 0 rows found in \"{name}\" rows {start}-{end}"
+                                                  + (f" ({skipped} skipped due to missing data)" if skipped else "")))
 
 
 def _nullable(col) -> bool:
@@ -423,11 +1051,15 @@ def _nullable(col) -> bool:
 
 
 def validate(config: Path, source: Path = None, prefix: str = None, target: str = None,
-             database: str = None, id_type: str = None) -> list:
+             database: str = None, id_type: str = None, source_name: str = None) -> list:
     """Check the configuration, and optionally one source workbook against it.
 
     Returns a list of Issue(severity, where, message); an empty list, or a list
     of warnings only, means executor.py can push this pair.
+
+    *source_name* overrides the CSV sheet name when the on-disk filename is a
+    content-addressed hash (e.g. uploaded files). Pass the original filename
+    stem so that `sheet_config.sheet_name` can match.
     """
     issues = []
     resolved = resolve_target(config, target, database, prefix, id_type)
@@ -437,7 +1069,7 @@ def validate(config: Path, source: Path = None, prefix: str = None, target: str 
         issues.append(Issue("error", "sheet_config", "no active rows - nothing would be created"))
     _check_config(sheets, columns, resolved.prefix, issues)
     if source and not [i for i in issues if i.severity == "error"]:
-        _check_source(sheets, columns, source, issues)
+        _check_source(sheets, columns, source, issues, source_name)
     return issues
 
 

@@ -246,7 +246,7 @@ export class ErDiagram {
   private controls = computed(() => this.control() ?? []);
 
   controlName = computed(() =>
-    this.controls().find((t) => t.table_name === 'source_file')?.physical_name ?? 'source_file');
+    this.controls().find((t) => t.table_name === 'load_config_audit')?.physical_name ?? 'load_config_audit');
 
   /** The auto-layout positions (before drag offsets). */
   autoBoxes = computed<Box[]>(() => {
@@ -254,7 +254,7 @@ export class ErDiagram {
     const blocks = this.blocks();
     const boxes: Box[] = [];
 
-    const anchor = controls.find((t) => t.table_name === 'source_file');
+    const anchor = controls.find((t) => t.table_name === 'load_config_audit');
     const otherControls = controls.filter((t) => t !== anchor);
     let cy = 0;
     if (anchor) {
@@ -342,7 +342,7 @@ export class ErDiagram {
     };
     let corridorSlot = 0;
 
-    const target = boxMap.get('source_file');
+    const target = boxMap.get('load_config_audit');
     if (target && target.fileRowY !== null) {
       for (const box of boxes) {
         if (box === target || box.fileRowY === null) continue;
@@ -353,7 +353,7 @@ export class ErDiagram {
         const cSlot = needsCorridor ? corridorSlot++ : 0;
         const path = this.edgePath(target, target.fileRowY, box, box.fileRowY, gSlot, cSlot);
         edges.push({ path, label: `${box.table.physical_name}.file_id`,
-                     from: 'source_file', table: box.table.table_name, kind: 'lineage' });
+                     from: 'load_config_audit', table: box.table.table_name, kind: 'lineage' });
       }
     }
 

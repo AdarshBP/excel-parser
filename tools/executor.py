@@ -33,6 +33,22 @@ import validator
 
 LoadResult = namedtuple("LoadResult", "file_id total per_table skipped_rows bad_cells target")
 
+# Defaults for orphaned columns (exist in DB but removed from config).
+# New rows get these values instead of failing on a missing column.
+_NUMERIC_TYPES = {"numeric", "decimal", "real", "double precision", "float",
+                  "integer", "bigint", "smallint", "int", "int4", "int8", "int2"}
+_BOOL_TYPES = {"boolean", "bool"}
+
+
+def _type_default(db_type: str):
+    """Return a sensible default for a database column type."""
+    t = db_type.lower().strip()
+    if t in _NUMERIC_TYPES:
+        return 0
+    if t in _BOOL_TYPES:
+        return False
+    return None      # text, date, timestamp → NULL
+
 
 def now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
@@ -41,7 +57,7 @@ def now() -> str:
 def execute(config: Path, source: Path, target: str = None, database=None, prefix: str = None,
             schema_sql: str = None, trace: int = 0, log=print, id_type: str = None,
             strict: bool = False, source_ref: str = None, config_ref: str = None,
-            skip_audit: bool = False) -> LoadResult:
+            skip_audit: bool = False, source_name: str = None) -> LoadResult:
     """Insert every configured row of `source` into the configured target.
 
     `target`, `database`, `prefix` and `id_type` override the workbook's
@@ -49,13 +65,16 @@ def execute(config: Path, source: Path, target: str = None, database=None, prefi
 
     With `id_type = uuid` the keys are UUIDs generated here rather than by the
     database, so a row keeps the same key on either target.
+
+    *source_name* overrides the CSV sheet name when the on-disk filename is a
+    content-addressed hash (e.g. uploaded files).
     """
     sheets, columns = validator.read_config(config)
     where = validator.resolve_target(config, target, database, prefix, id_type)
     prefix = where.prefix
     uuid_keys = where.id_type == "uuid"
     import csv_adapter
-    wb = csv_adapter.open_source(source)
+    wb = csv_adapter.open_source(source, source_name)
 
     dbmod.ident(f"{prefix}x", "table_prefix")
     con = dbmod.connect(where.target, where.database, prefix, where.db_schema)
@@ -122,16 +141,51 @@ def execute(config: Path, source: Path, target: str = None, database=None, prefi
             header_row = sheet.get("header_row")
             start, end = rowmod.row_range(sheet, ws)
 
+            # Detect orphaned columns: exist in DB but not in current config.
+            # These get a type-appropriate default on every new row.
+            config_col_names = {str(c["column_name"]).strip() for c in cols}
+            lineage_cols = {"file_id", "file_name", "file_sha256", "source_ref",
+                            "sheet_name", "source_row_num",
+                            f"{str(sheet['table_name']).strip()}_id"}
+            orphaned = []
+            try:
+                db_cols = con.table_columns(table)
+                for db_col, db_type in db_cols.items():
+                    if db_col in config_col_names or db_col in lineage_cols:
+                        continue
+                    default = _type_default(db_type)
+                    orphaned.append((db_col, default))
+                    default_desc = repr(default) if default is not None else "NULL"
+                    log(f"  {table}.{db_col} not in config — new rows get {default_desc}")
+            except Exception:
+                pass
+
             key = dbmod.ident(f"{str(sheet['table_name']).strip()}_id", "column_name")
             lead = ([key] if uuid_keys else []) + [
                 "file_id", "file_name", "file_sha256", "source_ref",
                 "sheet_name", "source_row_num"]
-            insert = (f"INSERT INTO {table} (" + ", ".join(lead) + ", "
-                      + ", ".join(dbmod.ident(c["column_name"], "column_name") for c in cols)
-                      + ") VALUES (" + ", ".join([ph] * (len(lead) + len(cols))) + ")")
+            all_col_names = (lead
+                             + [dbmod.ident(c["column_name"], "column_name") for c in cols]
+                             + [dbmod.ident(o[0], "column_name") for o in orphaned])
+            insert = (f"INSERT INTO {table} (" + ", ".join(all_col_names)
+                      + ") VALUES (" + ", ".join([ph] * len(all_col_names)) + ")")
             loaded = 0
+            row_ctx = {"file_name": source.name,
+                        "_seq_key": str(sheet["table_name"]).strip(),
+                        "_data_start_row": start}
+            # Parse where filter
+            import validator as validmod
+            where_clause = str(sheet.get("row_filter") or "").strip()
+            where_conditions = validmod.parse_where(where_clause) if where_clause else []
             for row_num in range(start, end + 1):
-                read = rowmod.build_row(ws, cols, row_num)
+                # Apply where filter
+                if where_conditions:
+                    from openpyxl.utils import column_index_from_string as _cis
+                    def _where_reader(ltr, _ws=ws, _row=row_num):
+                        return _ws.cell(_row, _cis(ltr)).value
+                    if not validmod.evaluate_where(where_conditions, _where_reader):
+                        continue
+                read = rowmod.build_row(ws, cols, row_num, row_ctx)
                 for ref, column, message in read.bad:
                     bad_cells.append(f"{table}: {name}!{ref} -> {column} stored as NULL, "
                                      f"{message}")
@@ -146,7 +200,8 @@ def execute(config: Path, source: Path, target: str = None, database=None, prefi
                     continue
                 params = ([str(uuid.uuid4())] if uuid_keys else []) \
                     + [file_id, source.name, digest, source_ref,
-                       name, row_num, *read.values]
+                       name, row_num, *read.values] \
+                    + [default for _, default in orphaned]
                 if loaded < trace:
                     log(f"\n  {name}!{row_num} -> {table}")
                     for ref, raw, column, value in read.cells:
@@ -171,13 +226,15 @@ def execute(config: Path, source: Path, target: str = None, database=None, prefi
             total += loaded
             log(f"{table:<32} {loaded:>4} rows from {name}!{start}-{end}")
 
-        # In strict mode, refuse to commit if any data issues were found
-        if strict and (bad_cells or skipped_rows):
+        # In strict mode, refuse to commit if there are type mismatches.
+        # Skipped rows (empty required columns) are logged but not blocking —
+        # empty sections in multi-block sheets are normal.
+        if strict and bad_cells:
             con.rollback()
             con.close()
             raise SystemExit(
-                f"data quality check failed: {len(bad_cells)} type mismatch(es), "
-                f"{len(skipped_rows)} skipped row(s) — nothing was written")
+                f"data quality check failed: {len(bad_cells)} value(s) don't match "
+                f"their column type — nothing was written")
 
         con.commit()
     except SystemExit:

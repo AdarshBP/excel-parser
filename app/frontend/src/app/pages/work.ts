@@ -1,9 +1,8 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, inject, signal, computed } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { ButtonModule } from '@openng/optimus-ui/button';
-import { CardModule } from '@openng/optimus-ui/card';
 import { DialogModule } from '@openng/optimus-ui/dialog';
 import { InputTextModule } from '@openng/optimus-ui/inputtext';
 import { MessageModule } from '@openng/optimus-ui/message';
@@ -12,6 +11,7 @@ import { SkeletonModule } from '@openng/optimus-ui/skeleton';
 import { TableModule } from '@openng/optimus-ui/table';
 import { TagModule } from '@openng/optimus-ui/tag';
 import { Api } from '../core/api';
+import { FileHandleService } from '../core/file-handle';
 import { Project, RunSummary } from '../core/models';
 import { WorkbookRefField } from './workbook-ref';
 
@@ -19,7 +19,7 @@ import { WorkbookRefField } from './workbook-ref';
 @Component({
   selector: 'app-work',
   imports: [
-    DatePipe, FormsModule, RouterLink, ButtonModule, CardModule, DialogModule,
+    DatePipe, FormsModule, RouterLink, ButtonModule, DialogModule,
     InputTextModule, MessageModule, SelectModule, SkeletonModule, TableModule, TagModule,
     WorkbookRefField,
   ],
@@ -30,25 +30,38 @@ import { WorkbookRefField } from './workbook-ref';
       @if (loading()) {
         <p-skeleton width="100%" height="3rem" />
         <p-skeleton width="100%" height="8rem" />
-        <p-skeleton width="100%" height="8rem" />
       }
 
-      <p-card>
-        <ng-template #title>
-          <div class="row">
-            <span>My configurations</span>
-            <p-button label="Download template" icon="pi pi-download" size="small"
-                      [outlined]="true" (onClick)="downloadTemplate()" />
-            <p-button label="New configuration" icon="pi pi-plus" size="small"
-                      (onClick)="openNew()" />
-          </div>
-        </ng-template>
+      <div class="page-header">
+        <div class="page-header-left">
+          <h1 class="page-title">Configurations</h1>
+          <p class="page-subtitle">Manage your file mapping configurations for different data sources.</p>
+        </div>
+        <div class="page-header-actions">
+          <p-button label="Download template" icon="pi pi-download" size="small"
+                    [outlined]="true" (onClick)="downloadTemplate()" />
+          <p-button label="New configuration" icon="pi pi-plus" size="small"
+                    (onClick)="openNew()" />
+        </div>
+      </div>
 
-        <p-table [value]="projects()" [loading]="loading()" dataKey="project_id" size="small">
+      <div class="search-bar">
+        <div class="search-wrap">
+          <i class="pi pi-search search-icon"></i>
+          <input pInputText [(ngModel)]="searchText" placeholder="Search configurations..."
+                 class="search-field" />
+        </div>
+        <p-select appendTo="body" [options]="sourceFilterOptions" optionLabel="label" optionValue="value"
+                  [(ngModel)]="sourceFilter" placeholder="All sources"
+                  [style]="{ minWidth: '9rem' }" />
+      </div>
+
+      <div class="table-wrap">
+        <p-table [value]="filteredProjects()" [loading]="loading()" dataKey="project_id" size="small">
           <ng-template #header>
             <tr>
               <th>Name</th><th>Source</th><th>Configuration</th>
-              <th>Rendered</th><th>Pushed</th><th></th>
+              <th>Rendered</th><th>Pushed</th><th>Actions</th>
             </tr>
           </ng-template>
           <ng-template #body let-p>
@@ -75,42 +88,20 @@ import { WorkbookRefField } from './workbook-ref';
             </tr>
           </ng-template>
           <ng-template #emptymessage>
-            <tr><td colspan="6" class="empty">Nothing saved yet: start with "New configuration".</td></tr>
-          </ng-template>
-        </p-table>
-      </p-card>
-
-      <p-card>
-        <ng-template #title>History</ng-template>
-        <p-table [value]="runs()" size="small">
-          <ng-template #header>
             <tr>
-              <th>When</th><th>Configuration</th><th>Source file</th>
-              <th>Destination</th><th>Rows</th><th>file_id</th><th>Status</th><th></th>
-            </tr>
-          </ng-template>
-          <ng-template #body let-r>
-            <tr>
-              <td>{{ r.started_at | date: 'short' }}</td>
-              <td><a [routerLink]="['/project', r.project_id]">{{ r.project_name }}</a></td>
-              <td>{{ r.source_name ?? '—' }}</td>
-              <td>{{ r.target ?? '—' }} {{ r.database ?? '' }}
-                  {{ r.db_schema ? '(' + r.db_schema + ')' : '' }}</td>
-              <td>{{ r.row_total ?? '—' }}</td>
-              <td>{{ r.file_id ?? '—' }}</td>
-              <td>
-                <p-tag [value]="r.status"
-                       [severity]="r.status === 'succeeded' ? 'success' : 'danger'" />
+              <td colspan="6">
+                <div class="empty-state">
+                  <div class="empty-state-icon"><i class="pi pi-list"></i></div>
+                  <p class="empty-state-title">No configurations yet</p>
+                  <p class="empty-state-desc">Create your first configuration to get started with your data mapping.</p>
+                  <p-button label="New configuration" icon="pi pi-plus" size="small"
+                            (onClick)="openNew()" />
+                </div>
               </td>
-              <td><p-button label="Details" size="small" [text]="true"
-                            [routerLink]="['/run', r.run_id]" /></td>
             </tr>
           </ng-template>
-          <ng-template #emptymessage>
-            <tr><td colspan="8" class="empty">No pushes yet.</td></tr>
-          </ng-template>
         </p-table>
-      </p-card>
+      </div>
     </div>
 
     <p-dialog header="New configuration" [(visible)]="dialog" [modal]="true"
@@ -127,12 +118,12 @@ import { WorkbookRefField } from './workbook-ref';
                [class.input-err]="submitted && !draft.name.trim()" />
 
         <label [class.label-err]="submitted && !draft.config_ref.trim()">Configuration workbook *</label>
-        <app-workbook-ref [(value)]="draft.config_ref" [files]="files()"
-                          placeholder="examples/01_simple/sales_config.xlsx" role="config" />
+        <app-workbook-ref [(value)]="draft.config_ref" role="config"
+                          handleKey="draft:config" />
 
         <label [class.label-err]="submitted && !draft.source_ref.trim()">Source workbook *</label>
-        <app-workbook-ref [(value)]="draft.source_ref" [files]="files()"
-                          placeholder="examples/01_simple/sales_source.xlsx" />
+        <app-workbook-ref [(value)]="draft.source_ref"
+                          handleKey="draft:source" />
 
         @if (dialogError()) { <p-message severity="error" [text]="dialogError()!" /> }
       </div>
@@ -143,14 +134,24 @@ import { WorkbookRefField } from './workbook-ref';
     </p-dialog>
   `,
   styles: `
-    .page { display: grid; gap: 1rem; padding: 1.25rem; }
-    .row { display: flex; justify-content: space-between; align-items: center; }
+    .page { display: grid; gap: 1rem; padding: 1.5rem 2rem; }
     .ref { margin-left: .4rem; font-size: .72rem; color: var(--p-text-muted-color);
            display: inline-block; max-width: 20rem; overflow: hidden;
            text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
     .actions { white-space: nowrap; }
-    .empty { text-align: center; padding: 2rem 1rem !important;
-             color: var(--p-text-muted-color); }
+
+    /* search bar */
+    .search-wrap { position: relative; flex: 1; min-width: 0; }
+    .search-icon { position: absolute; left: .75rem; top: 50%; transform: translateY(-50%);
+                   color: var(--text-secondary); font-size: .82rem; pointer-events: none;
+                   z-index: 1; }
+    .search-field { padding-left: 2.25rem !important; width: 100%; }
+
+    /* table wrapper */
+    .table-wrap { background: var(--surface); border: 1px solid var(--border);
+                  border-radius: var(--radius); overflow: hidden; }
+
+    /* dialog form */
     .template-hint { display: flex; gap: .5rem; align-items: center; justify-content: space-between;
                      padding: .5rem .65rem; background: var(--primary-soft);
                      border: 1px solid var(--primary); border-radius: var(--radius-sm);
@@ -171,13 +172,12 @@ import { WorkbookRefField } from './workbook-ref';
 })
 export class Work {
   private api = inject(Api);
+  private fh = inject(FileHandleService);
   private router = inject(Router);
 
   loading = signal(true);
   projects = signal<Project[]>([]);
   runs = signal<RunSummary[]>([]);
-  files = signal<string[]>([]);
-  root = signal('');
   saving = signal(false);
   error = signal<string | null>(null);
   dialogError = signal<string | null>(null);
@@ -185,12 +185,38 @@ export class Work {
   submitted = false;
   draft = { name: '', source_ref: '', config_ref: '' };
 
+  searchText = '';
+  sourceFilter = '';
+  sourceFilterOptions = [
+    { label: 'All sources', value: '' },
+    { label: 'Link', value: 'sheet' },
+    { label: 'Drive', value: 'drive' },
+    { label: 'Browser', value: 'upload' },
+  ];
+
+  filteredProjects = computed(() => {
+    let list = this.projects();
+    if (this.sourceFilter) {
+      list = list.filter(p => p.source_kind === this.sourceFilter);
+    }
+    if (this.searchText.trim()) {
+      const q = this.searchText.toLowerCase();
+      list = list.filter(p => p.name.toLowerCase().includes(q) ||
+        p.source_ref.toLowerCase().includes(q) ||
+        p.config_ref.toLowerCase().includes(q));
+    }
+    return list;
+  });
+
   constructor() {
     this.load();
   }
 
   kindLabel(kind: Project['source_kind']) {
-    return kind === 'sheet' ? 'link' : kind === 'drive' ? 'Drive' : 'local';
+    if (kind === 'sheet') return 'link';
+    if (kind === 'drive') return 'Drive';
+    if (kind === 'upload') return 'browser';
+    return 'file';
   }
 
   private load() {
@@ -199,9 +225,6 @@ export class Work {
       error: (e) => { this.error.set(e.message); this.loading.set(false); },
     });
     this.api.runs().subscribe({ next: (r) => this.runs.set(r) });
-    this.api.localWorkbooks().subscribe({
-      next: (w) => { this.files.set(w.files); this.root.set(w.root); },
-    });
   }
 
   downloadTemplate() {
@@ -212,6 +235,8 @@ export class Work {
     this.draft = { name: '', source_ref: '', config_ref: '' };
     this.submitted = false;
     this.dialogError.set(null);
+    this.fh.remove('draft:source');
+    this.fh.remove('draft:config');
     this.dialog = true;
   }
 
@@ -231,6 +256,9 @@ export class Work {
       next: (p) => {
         this.saving.set(false);
         this.dialog = false;
+        // Transfer draft file handles to the new project's keys
+        this.fh.move('draft:source', `${p.project_id}:source`);
+        this.fh.move('draft:config', `${p.project_id}:config`);
         this.router.navigate(['/project', p.project_id]);
       },
       error: (e) => { this.saving.set(false); this.dialogError.set(e.message); },

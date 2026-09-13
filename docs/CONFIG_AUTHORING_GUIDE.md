@@ -85,16 +85,16 @@ file to read.
 **Example — simple (one table):**
 
 ```
-table_name | sheet_name | layout | header_row | data_start_row | data_end_row | active | description     | domain | notes
-sales      | Sales      | table  | 1          | 2              |              | Y      | Invoice records | sales  | One row per invoice
+table_name | sheet_name | layout | header_row | data_start_row | data_end_row | row_filter | active | description     | domain | notes
+sales      | Sales      | table  | 1          | 2              |              |            | Y      | Invoice records | sales  | One row per invoice
 ```
 
 **Example — complex (multiple tables from one file):**
 
 ```
-table_name       | sheet_name                      | layout    | header_row | data_start_row | data_end_row | active
-summary          | Summary                         | key_value |            | 12             | 20           | Y
-payout_breakup   | Payout Breakup                  | table     | 6          | 7              | 43           | Y
+table_name       | sheet_name                      | layout    | header_row | data_start_row | data_end_row | row_filter | active
+summary          | Summary                         | key_value |            | 12             | 20           |            | Y
+payout_breakup   | Payout Breakup                  | table     | 6          | 7              | 43           |            | Y
 order_level      | Order Level                     | table     | 3          | 4              |              | Y
 complaint_status | Unresolved Customer Complaints  | table     | 1          | 2              | 16           | Y
 ```
@@ -107,6 +107,7 @@ complaint_status | Unresolved Customer Complaints  | table     | 1          | 2 
 | `header_row` | no | Row number of the header (1-based). Recorded for audit only — the loader does not read data from it. Leave blank for `key_value` |
 | `data_start_row` | **yes** | First row of real data. 1-based, as shown in Excel. Must be below any header/title row |
 | `data_end_row` | no | Last row of data. Leave blank to read to the last used row. **Set it** if a totals row, notes, or another block follows |
+| `row_filter` | no | Skip rows that don't match. Syntax: `col:D > 0`, `col:B = "Delivered"`, `col:A is_not_empty`. Combine with `AND` / `OR`. Leave blank to load all rows |
 | `active` | **yes** | `Y` = generate table and load it. `N` = ignore completely (park it without deleting) |
 | `description` | no | What this table represents. Written as `COMMENT ON TABLE` in PostgreSQL. AI agents and BI tools read this |
 | `domain` | no | Business domain (e.g., `finance`, `sales`, `food_delivery`). Prepended to the table comment as `[domain]` |
@@ -142,7 +143,7 @@ sales      | col:D      | Amount        | amount       | numeric   | Y        | 
 | Column | Required | Description |
 |---|---|---|
 | `table_name` | **yes** | Must match a `table_name` in `sheet_config` |
-| `source_ref` | **yes** | Which Excel column to read. Format: `col:A`, `col:B`, `col:AM`. **Always uppercase letters, no row numbers** |
+| `source_ref` | **yes** | Where to get the value. Column: `col:A`, `col:B`. Constant: `const:<value>`. Function: `fn:now`, `fn:today`. Expression: `expr:{A} + {B}`. Positional map: `map:v1||v2||v3`. See "How to determine source_ref" below. |
 | `source_header` | no | Header text as printed in the source file. Documentation only — the parser reads by position (`source_ref`), never by header text |
 | `column_name` | **yes** | Database column name. Lowercase `snake_case`, unique within the table, max 63 chars. Must not be `file_id`, `file_name`, `file_sha256`, `source_ref`, `sheet_name`, `source_row_num`, or `<table_name>_id` |
 | `data_type` | **yes** | One of: `text`, `numeric`, `integer`, `date`, `timestamp`, `boolean` |
@@ -159,6 +160,10 @@ sales      | col:D      | Amount        | amount       | numeric   | Y        | 
 ---
 
 ## How to determine `source_ref`
+
+`source_ref` supports five formats:
+
+### 1. Column reference — `col:<letter>`
 
 Open your source file in Excel. Look at the column letters at the top:
 
@@ -177,6 +182,108 @@ Open your source file in Excel. Look at the column letters at the top:
 
 **Important:** If the supplier ever inserts a column in the source file, all
 `source_ref` values after that point shift. Always re-check them.
+
+### 2. Constant value — `const:<value>`
+
+Fills every row with the same fixed value instead of reading from Excel.
+The value is cast to the column's `data_type` like any cell.
+
+- `const:adarsh` with `data_type=text` → every row gets `'adarsh'`
+- `const:100` with `data_type=integer` → every row gets `100`
+- `const:true` with `data_type=boolean` → every row gets `true`
+
+### 3. Computed value — `fn:<name>`
+
+Fills every row with a value computed at load time. Available functions:
+
+| Function | Produces | Compatible `data_type` |
+|---|---|---|
+| `fn:now` | current date and time | `timestamp`, `text` |
+| `fn:today` | current date | `date`, `text` |
+| `fn:uuid` | a random UUID per row | `text` |
+| `fn:file_name` | the source file name | `text` |
+| `fn:sequence` | auto-incrementing counter (1, 2, 3...) per table | `integer`, `numeric`, `text` |
+
+The validator checks that the function name exists and that the column's
+`data_type` is compatible.
+
+### 4. Expression — `expr:<expression>`
+
+Computes a value from other columns, constants, functions, and literals.
+Use `{X}` to reference Excel column X.
+
+**Operators:**
+
+| Operator | Meaning | Example |
+|---|---|---|
+| `+` | numeric addition | `expr:{D} + {E}` |
+| `-` | numeric subtraction | `expr:{D} - {E}` |
+| `*` | numeric multiplication | `expr:{D} * 2` |
+| `/` | numeric division | `expr:{D} / 100` |
+| `&` | string concatenation | `expr:{A} & " - " & {C}` |
+| `()` | grouping / precedence | `expr:({A} + {B}) * {C}` |
+| `-{X}` | unary minus (negate) | `expr:-{D}` |
+
+**Operands you can use inside an expression:**
+
+| Syntax | Meaning | Example |
+|---|---|---|
+| `{A}` | value from Excel column A | `{A}`, `{AM}` |
+| `const:value` | a fixed string or number | `const:100`, `const:USD` |
+| `fn:name` | a computed value | `fn:today`, `fn:sequence` |
+| `"text"` or `'text'` | a string literal | `" - "`, `"_"` |
+| `123` or `3.14` | a numeric literal | `2`, `100`, `0.18` |
+
+**NULL handling:** Arithmetic with NULL produces NULL (like SQL).
+`&` treats NULL as empty string. Use `null_default` on the column to
+replace NULL results with a fallback value.
+
+**Post-processing:** `script` and `null_default` apply to the expression
+result after it is cast to `data_type`, just like any other column.
+
+**Examples:**
+
+- `expr:{D} + {E}` — sum two numeric columns
+- `expr:({D} + {E}) * {F}` — grouped arithmetic
+- `expr:-{D}` — negate a value
+- `expr:{A} & " - " & {C}` — concatenate with separator
+- `expr:{D} * 0.18` — calculate 18% tax on amount
+- `expr:{A} & " " & fn:today` — append today's date to a text value
+
+The result is cast to the column's `data_type` like any other value.
+
+### 5. Positional map — `map:v1||v2||v3||...`
+
+Assigns a different value to each row by position. The first data row
+gets `v1`, the second gets `v2`, and so on. Use `||` (double pipe) to
+separate values.
+
+Ideal for `key_value` blocks where the source has no label column — you
+provide the labels yourself.
+
+**Example:** A source sheet has restaurant info in rows 5–9 of column A,
+but no label column:
+
+```
+Row 5:  Dilli Darbar
+Row 6:  Whitefield
+Row 7:  Bangalore
+Row 8:  Rest. ID - 4780
+Row 9:  GSTIN - 29ABNFM9601R1Z9
+```
+
+Configuration:
+
+```
+source_ref: map:Restaurant Name||Area||City||Restaurant ID||GSTIN
+```
+
+Result: row 5 → "Restaurant Name", row 6 → "Area", row 7 → "City", etc.
+
+- If the map has fewer values than rows, extra rows get NULL.
+- If the map has more values than rows, extra values are ignored (a
+  warning is emitted during validation).
+- Values cannot contain `||` (the delimiter).
 
 ---
 
@@ -269,7 +376,7 @@ Every data table gets these columns for free (do NOT add them to `column_config`
 file_id            -- UUID identifying this load
 file_name          -- source file name at load time
 file_sha256        -- SHA-256 hash of the source file (for dedup)
-source_ref         -- original reference (Drive link, Sheets URL, or local path)
+source_ref         -- original reference (Drive link, Sheets URL, or upload ref)
 sheet_name         -- worksheet the row came from
 source_row_num     -- 1-based Excel row number
 ```
@@ -346,9 +453,9 @@ id_type        integer
 One row per block. Example for a file with two sheets:
 
 ```
-table_name  | sheet_name       | layout | header_row | data_start_row | data_end_row | active | description
-orders      | Order History    | table  | 1          | 2              |              | Y      | Customer orders
-payments    | Payment Details  | table  | 3          | 4              | 50           | Y      | Payment records
+table_name  | sheet_name       | layout | header_row | data_start_row | data_end_row | row_filter | active | description
+orders      | Order History    | table  | 1          | 2              |              |            | Y      | Customer orders
+payments    | Payment Details  | table  | 3          | 4              | 50           |            | Y      | Payment records
 ```
 
 ### Step 4: Create `column_config`
@@ -448,7 +555,7 @@ ER diagram. It does NOT create a database constraint.
 - [ ] `data_type` chosen from the **messiest** value in the column
 - [ ] `nullable = N` only on cells that are always populated
 - [ ] `column_order` filled in for every column
-- [ ] `source_ref` letters verified against the actual source file
+- [ ] `source_ref` verified — `col:` letters match the source file, `const:` / `fn:` / `expr:` values are valid
 - [ ] `description` and `domain` filled in for AI/BI discoverability
 - [ ] Scripts tested (run validator with the source file)
 - [ ] Schema regenerated after any config change (`--ddl`)

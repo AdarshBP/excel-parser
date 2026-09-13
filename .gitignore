@@ -1,11 +1,14 @@
-# Environment / secrets
+# Environment / secrets (real credentials — never commit)
 .env
 .env.local
+.env.docker
+.env.prod
 .env.*.local
+# .env.example and .env.prod ARE tracked (they have placeholders, not real secrets)
 
 # Local assistant/dev tool config
 .devin/
-.agents/
+
 
 # macOS
 .DS_Store
@@ -22,6 +25,10 @@ node_modules/
 dist/
 .angular/
 
+# Generated DDL and test databases
+schema.*.sql
+*.db
+
 # Test / coverage
 .pytest_cache/
 .mypy_cache/
@@ -31,3 +38,5 @@ dist/
 .idea/
 .vscode/
 *.swp
+clientFiles*/
+app/cache/*

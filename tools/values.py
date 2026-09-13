@@ -30,8 +30,11 @@ def to_number(value):
         return None
 
 
-def to_date(value, with_time: bool):
-    """Excel date/text -> 'YYYY-MM-DD[ HH:MM:SS]'. Raises ValueError on junk."""
+def to_date(value, with_time: bool, date_format: str = None):
+    """Excel date/text -> 'YYYY-MM-DD[ HH:MM:SS]'. Raises ValueError on junk.
+
+    If date_format is given, only that format is tried (no guessing).
+    """
     if isinstance(value, (dt.datetime, dt.date)):
         if with_time and isinstance(value, dt.datetime):
             return value.isoformat(sep=" ")
@@ -39,22 +42,25 @@ def to_date(value, with_time: bool):
     text = str(value or "").strip()
     if text in BLANKS:
         return None
-    for fmt in DATE_FORMATS:
+    formats = [date_format] if date_format else DATE_FORMATS
+    for fmt in formats:
         try:
             parsed = dt.datetime.strptime(text, fmt)
         except ValueError:
             continue
         return parsed.isoformat(sep=" ") if with_time else parsed.date().isoformat()
+    if date_format:
+        raise ValueError(f"{text!r} does not match date_format {date_format!r}")
     raise ValueError(f"{text!r} is not a date")
 
 
-def cast(value, dtype: str):
+def cast(value, dtype: str, date_format: str = None):
     """Convert one cell for its configured data_type. Raises ValueError on junk."""
     if dtype in ("numeric", "integer"):
         number = to_number(value)
         return int(number) if dtype == "integer" and number is not None else number
     if dtype in ("date", "timestamp"):
-        return to_date(value, dtype == "timestamp")
+        return to_date(value, dtype == "timestamp", date_format=date_format)
     if dtype == "boolean":
         text = str(value or "").strip().lower()
         if text in ("y", "yes", "true", "1"):

@@ -9,6 +9,7 @@ export interface AppSettings {
   auditLog: boolean;
   exportCsv: boolean;
   loadTracking: boolean;
+  dataViewer: boolean;
 }
 
 const DEFAULTS: AppSettings = {
@@ -17,6 +18,7 @@ const DEFAULTS: AppSettings = {
   auditLog: true,
   exportCsv: true,
   loadTracking: true,
+  dataViewer: true,
 };
 
 @Injectable({ providedIn: 'root' })
@@ -30,6 +32,7 @@ export class Settings {
   auditLog() { return this.current().auditLog; }
   exportCsv() { return this.current().exportCsv; }
   loadTracking() { return this.current().loadTracking; }
+  dataViewer() { return this.current().dataViewer; }
 
   update(partial: Partial<AppSettings>) {
     const merged = { ...this.current(), ...partial };

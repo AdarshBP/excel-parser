@@ -2,7 +2,6 @@ import { HttpClient } from '@angular/common/http';
 import { Component, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ButtonModule } from '@openng/optimus-ui/button';
-import { CardModule } from '@openng/optimus-ui/card';
 import { InputTextModule } from '@openng/optimus-ui/inputtext';
 import { MessageModule } from '@openng/optimus-ui/message';
 import { SelectModule } from '@openng/optimus-ui/select';
@@ -15,16 +14,22 @@ import { DriveStatus } from '../core/models';
 @Component({
   selector: 'app-settings',
   imports: [
-    FormsModule, ButtonModule, CardModule, InputTextModule, MessageModule,
+    FormsModule, ButtonModule, InputTextModule, MessageModule,
     SelectModule, TagModule, ToggleSwitchModule,
   ],
   template: `
     <div class="page">
-      <h2>Settings</h2>
+      <div class="page-header">
+        <div class="page-header-left">
+          <h1 class="page-title">Settings</h1>
+          <p class="page-subtitle">Configure application preferences and integrations.</p>
+        </div>
+      </div>
 
       <!-- General -->
-      <p-card>
-        <ng-template #title>General</ng-template>
+      <div class="section-card">
+        <div class="section-title">General</div>
+        <div class="section-desc">Basic application settings.</div>
         <div class="setting-row">
           <div class="setting-info">
             <div class="setting-label">Poll interval</div>
@@ -36,36 +41,35 @@ import { DriveStatus } from '../core/models';
                       [(ngModel)]="pollInterval" (ngModelChange)="savePoll()" />
           </div>
         </div>
-        <div class="setting-row">
+        <div class="setting-row setting-row-border">
           <div class="setting-info">
             <div class="setting-label">Keyboard shortcuts</div>
             <div class="setting-desc">Enable keyboard shortcuts on the project page
-              ({{ isMac ? '⌘' : 'Ctrl' }}+S save, {{ isMac ? '⌘' : 'Ctrl' }}+R render, etc.).
-              Off by default.</div>
+              ({{ isMac ? '\u2318' : 'Ctrl' }}+S save, {{ isMac ? '\u2318' : 'Ctrl' }}+R render, etc.).</div>
           </div>
           <div class="setting-control">
             <p-toggleswitch [(ngModel)]="keyboardShortcuts" (ngModelChange)="saveKeyboard()" />
           </div>
         </div>
-      </p-card>
+      </div>
 
       <!-- Feature flags -->
-      <p-card>
-        <ng-template #title>Features</ng-template>
+      <div class="section-card">
+        <div class="section-title">Features</div>
+        <div class="section-desc">Enable or disable application features.</div>
         <div class="setting-row">
           <div class="setting-info">
             <div class="setting-label">Push history page</div>
             <div class="setting-desc">Shows the "Push history" page in the sidebar.
-              A timeline of every push operation: who pushed what, when, from which
-              file, and to which database. Data is always recorded; this only
-              controls whether the page is visible.</div>
+              A timeline of every push operation:
+              who pushed what, when, from which file, and to which database.</div>
           </div>
           <div class="setting-control">
             <p-toggleswitch [(ngModel)]="flags.auditLog" (ngModelChange)="saveFlags()" />
           </div>
         </div>
 
-        <div class="setting-row">
+        <div class="setting-row setting-row-border">
           <div class="setting-info">
             <div class="setting-label">Export CSV</div>
             <div class="setting-desc">Shows a download button on preview tables
@@ -76,24 +80,24 @@ import { DriveStatus } from '../core/models';
             <p-toggleswitch [(ngModel)]="flags.exportCsv" (ngModelChange)="saveFlags()" />
           </div>
         </div>
-        <div class="setting-row">
+        <div class="setting-row setting-row-border">
           <div class="setting-info">
             <div class="setting-label">Database load tracking</div>
             <div class="setting-desc">When enabled, a <code>load_config_audit</code> table
               is created in the target database to record every load: which file,
               which config, which tables, and when. Also enables duplicate file
-              detection. Turn off for a leaner database. Data tables always keep
-              file_name, file_sha256, and source_ref on every row regardless.</div>
+              detection.</div>
           </div>
           <div class="setting-control">
             <p-toggleswitch [(ngModel)]="flags.loadTracking" (ngModelChange)="saveFlags()" />
           </div>
         </div>
-      </p-card>
+      </div>
 
       <!-- Google Drive -->
-      <p-card>
-        <ng-template #title>Google Drive</ng-template>
+      <div class="section-card">
+        <div class="section-title">Google Drive</div>
+        <div class="section-desc">Connect your Google account to browse and select files from Drive.</div>
 
         @if (!driveStatus()) {
           <p class="muted">Loading...</p>
@@ -111,18 +115,17 @@ import { DriveStatus } from '../core/models';
             <p-tag value="not configured" severity="warn" />
           </div>
         } @else if (!driveStatus()!.connected) {
-          <div class="setting-row">
-            <div class="setting-info">
-              <div class="setting-label">Not connected</div>
-              <div class="setting-desc">
-                Connect your Google account to browse and select files from Drive.
-                Only read-only access is requested.
+          <div class="drive-connect-row">
+            <div class="drive-status">
+              <img src="https://www.gstatic.com/images/branding/product/1x/drive_2020q4_48dp.png"
+                   alt="Google Drive" class="drive-icon" />
+              <div class="drive-info">
+                <div class="setting-label">Not connected</div>
+                <div class="setting-desc">Only read-only access is requested.</div>
               </div>
             </div>
-            <div class="setting-control">
-              <p-button label="Connect Google Drive" icon="pi pi-google" size="small"
-                        [loading]="connecting()" (onClick)="connect()" />
-            </div>
+            <p-button label="Connect Google Drive" icon="pi pi-google" size="small"
+                      [loading]="connecting()" (onClick)="connect()" />
           </div>
         } @else {
           <div class="setting-row">
@@ -151,43 +154,54 @@ import { DriveStatus } from '../core/models';
           <p-message [severity]="driveMsg()!.includes('Disconnected') ? 'info' : 'success'"
                      [text]="driveMsg()!" />
         }
-      </p-card>
+      </div>
 
       <!-- About -->
-      <p-card>
-        <ng-template #title>About</ng-template>
+      <div class="section-card">
+        <div class="section-title">About</div>
+        <div class="section-desc">Application information.</div>
         <div class="about">
-          <div class="setting-row">
-            <span class="muted">Application</span>
-            <span>Excel Parser</span>
+          <div class="about-row">
+            <span class="about-label">Application</span>
+            <span class="about-value">Excel Parser</span>
           </div>
-          <div class="setting-row">
-            <span class="muted">Version</span>
-            <span>1.0.0</span>
+          <div class="about-row">
+            <span class="about-label">Version</span>
+            <span class="about-value">1.0.0</span>
           </div>
-          <div class="setting-row">
-            <span class="muted">Backend</span>
-            <span>{{ backendVersion() }}</span>
+          <div class="about-row">
+            <span class="about-label">Backend</span>
+            <span class="about-value">{{ backendVersion() }}</span>
           </div>
         </div>
-      </p-card>
+      </div>
     </div>
   `,
   styles: `
-    .page { display: grid; gap: 1rem; padding: 1.25rem; max-width: 44rem; margin: 0 auto; }
-    h2 { margin: 0; font-size: 1.1rem; }
+    .page { display: grid; gap: 1rem; padding: 1.5rem 2rem; max-width: 48rem; }
 
     .setting-row { display: flex; gap: 1rem; align-items: start;
-                   justify-content: space-between; }
+                   justify-content: space-between; padding: .65rem 0; }
+    .setting-row-border { border-top: 1px solid var(--border); }
     .setting-info { flex: 1; min-width: 0; }
     .setting-label { font-weight: 600; font-size: .85rem; }
     .setting-desc { font-size: .75rem; color: var(--text-secondary); margin-top: .2rem;
                     line-height: 1.5; }
     .setting-control { display: flex; gap: .4rem; align-items: center; flex-shrink: 0; }
 
-    .about .setting-row { padding: .3rem 0; font-size: .8rem; }
-    .about code { font-size: .72rem; }
-    .muted { color: var(--text-secondary); }
+    .drive-connect-row { display: flex; align-items: center; justify-content: space-between;
+                         gap: 1rem; }
+    .drive-status { display: flex; align-items: center; gap: .75rem; }
+    .drive-icon { width: 2rem; height: 2rem; flex-shrink: 0; }
+    .drive-info { min-width: 0; }
+
+    .about { display: grid; gap: 0; }
+    .about-row { display: flex; justify-content: space-between; align-items: center;
+                 padding: .35rem 0; font-size: .82rem; }
+    .about-label { color: var(--text-secondary); }
+    .about-value { font-weight: 500; }
+
+    .muted { color: var(--text-secondary); font-size: .8rem; }
   `,
 })
 export class SettingsPage {

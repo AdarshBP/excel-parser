@@ -83,6 +83,7 @@ Rules that matter:
 | `data_start_row` | yes | first row of real data | 1-based, as shown in Excel. Must be **below** any title/header row. |
 | `data_end_row` | no | last row of real data | leave blank to read to the end of the sheet. Set it to exclude totals rows, notes, or a second block further down. |
 | `active` | yes | `Y` / `N` | `N` = no table generated and nothing loaded. Use it to park a block instead of deleting the rows. |
+| `row_filter` | no | skip rows that don't match | Only rows matching this condition are loaded. Syntax: `col:LETTER op value`, e.g. `col:D > 0`, `col:B = "Delivered"`, `col:A is_not_empty`. Operators: `=`, `!=`, `>`, `<`, `>=`, `<=`, `contains`, `not_contains`, `is_empty`, `is_not_empty`. Combine with `AND` / `OR`. |
 | `description` | no | what the table represents | written as a `COMMENT ON TABLE` in PostgreSQL so AI agents and BI tools can discover meaning. |
 | `domain` | no | business domain / category | e.g. `finance`, `sales`, `food_delivery`. Prepended to the table comment as `[domain]`. |
 | `notes` | no | free text | copied into the generated SQL as a comment. |
@@ -107,44 +108,75 @@ Rules that matter:
 | Column | Required | Meaning | Rules |
 |---|---|---|---|
 | `table_name` | yes | must match a `sheet_config.table_name` | rows whose table is missing or inactive are ignored. |
-| `source_ref` | yes | which Excel column to read | format `col:<letter>`, e.g. `col:A`, `col:AM`. Uppercase letters, no row number, no ranges, no formulas. |
+| `source_ref` | yes | where to get the column value | Five formats: **`col:<letter>`** reads from an Excel column; **`const:<value>`** fills every row with a fixed value; **`fn:<name>`** fills every row with a computed value (`now`, `today`, `uuid`, `file_name`, `sequence`); **`expr:<expression>`** computes a value from other columns/constants/functions (e.g. `expr:{A} + {B}`, `expr:{A} & " - " & {C}`); **`map:v1||v2||...`** assigns a different value to each row by position — the first data row gets `v1`, the second gets `v2`, etc. (use `||` double-pipe as separator; ideal for `key_value` blocks without a label column). Expressions support `+`, `-`, `*`, `/` (numeric), `&` (concat), parentheses `()`, unary minus `-{A}`. NULL in arithmetic → NULL (like SQL). `script` and `null_default` apply after the result is cast. |
 | `source_header` | no | header text as printed in the file | Documentation only - so a human can see which header a column came from. **Not used for matching or logic.** The parser reads by `source_ref` (column position), never by header text. If empty, the column still loads fine - you just lose the human-readable label in the ER diagram and preview tooltips. A renamed header in the source file does not break the load. |
 | `column_name` | yes | database column name | lowercase `snake_case`, unique **within the table**, must not be `file_id`, `sheet_name`, `source_row_num` or `<table_name>_id` (the loader adds those). |
 | `data_type` | yes | one of `text`, `numeric`, `integer`, `date`, `timestamp`, `boolean` | anything else stops schema generation with an error. |
 | `nullable` | yes | `Y` / `N` | `N` = `NOT NULL` in the schema, and any source row with that cell empty is rejected and reported instead of failing the load. Keep it `Y` unless the cell is genuinely always filled. |
 | `is_key` | yes | `Y` / `N` | `Y` only creates a non-unique index (e.g. on `order_id`). It is **not** a primary key and does not deduplicate. |
-| `transform` | no | `trim`, `money`, `percent`, `date`, blank | documentation of intent; the actual cleaning is driven by `data_type` (see below). |
 | `column_order` | yes | integer | controls the column order in the generated table. Gaps are fine; duplicates make the order arbitrary. |
 | `references` | no | `table_name.column_name` | declares a foreign-key relationship to another table's column, drawn as a dashed line in the ER diagram. Does not create a database constraint - it is for documentation and the diagram only. |
 | `null_default` | no | the value to use when a cell is empty | blank or `null` = store NULL (the default). For `numeric`/`integer` columns, `0` stores zero instead of NULL. For `text`, any string (e.g. an empty string or `N/A`). For `boolean`, `0`/`1`/`true`/`false`. Applied after type casting, so a cell with `-` that casts to NULL will also get the default. |
 | `script` | no | predefined transformation | applied after type casting on every cell. Chain with `\|`: `trim\|uppercase`. Errors block the push. See script list below. |
+| `date_format` | no | pin the date parsing format | e.g. `%d/%m/%Y` (DD/MM/YYYY) or `%m/%d/%Y` (MM/DD/YYYY). Without this, the parser auto-detects (which can confuse DD/MM and MM/DD). Only applies to `date` and `timestamp` columns. |
 | `description` | no | what this column means | written as a `COMMENT ON COLUMN` in PostgreSQL. AI agents and BI tools read these to understand the schema without documentation. |
 | `unit` | no | unit of measurement | e.g. `INR`, `USD`, `percent`, `kg`, `count`. Appended to the column comment in parentheses. |
 
 ### Available scripts
 
-| Script | Applies to | What it does |
+**Text scripts:**
+
+| Script | Example | Result |
 |---|---|---|
-| `uppercase` | text | Convert to UPPER CASE |
-| `lowercase` | text | Convert to lower case |
-| `titlecase` | text | Capitalize Each Word |
-| `trim` | text | Strip leading/trailing whitespace |
-| `strip_spaces` | text | Remove all whitespace |
-| `digits_only` | text | Keep only digits |
-| `letters_only` | text | Keep only letters |
-| `alphanum_only` | text | Keep only letters and digits |
-| `abs` | numeric/integer | Absolute value |
-| `round_2` | numeric | Round to 2 decimal places |
-| `round_0` | numeric | Round to 0 decimal places |
-| `floor` | numeric/integer | Round down |
-| `ceil` | numeric/integer | Round up |
-| `negate` | numeric/integer | Flip the sign |
-| `date_only` | timestamp | Strip time, keep YYYY-MM-DD |
-| `year_month` | date/timestamp | Extract YYYY-MM |
-| `not_null` | any | Error if the value is NULL |
+| `uppercase` | `'hello world'` | `'HELLO WORLD'` |
+| `lowercase` | `'Hello World'` | `'hello world'` |
+| `titlecase` | `'hello world'` | `'Hello World'` |
+| `trim` | `'  hello  '` | `'hello'` |
+| `strip_spaces` | `'hello world'` | `'helloworld'` |
+| `collapse_spaces` | `'hello    world'` | `'hello world'` |
+| `replace_newlines` | `'line1\nline2'` | `'line1 line2'` |
+| `digits_only` | `'INV-001-AB'` | `'001'` |
+| `letters_only` | `'Order-123'` | `'Order'` |
+| `alphanum_only` | `'Order #123!'` | `'Order123'` |
+| `remove_punctuation` | `'Hello, World!'` | `'Hello World'` |
+| `first_word` | `'John Smith'` | `'John'` |
+| `last_word` | `'John Smith'` | `'Smith'` |
+| `left_10` | `'ABCDEFGHIJKLMNOP'` | `'ABCDEFGHIJ'` |
+| `right_10` | `'ABCDEFGHIJKLMNOP'` | `'GHIJKLMNOP'` |
+| `slug` | `'Hello World!'` | `'hello-world'` |
+
+**Numeric scripts:**
+
+| Script | Example | Result |
+|---|---|---|
+| `abs` | `-120.5` | `120.5` |
+| `negate` | `100` | `-100` |
+| `round_2` | `3.14159` | `3.14` |
+| `round_1` | `3.456` | `3.5` |
+| `round_0` | `3.7` | `4.0` |
+| `floor` | `3.9` | `3` |
+| `ceil` | `3.1` | `4` |
+| `pct_to_fraction` | `18.0` | `0.18` |
+| `fraction_to_pct` | `0.18` | `18.0` |
+| `clamp_0` | `-5` | `0` |
+
+**Date scripts:**
+
+| Script | Example | Result |
+|---|---|---|
+| `date_only` | `'2026-08-02T19:45:00'` | `'2026-08-02'` |
+| `year_month` | `'2026-08-02'` | `'2026-08'` |
+| `year_only` | `'2026-08-02'` | `'2026'` |
+
+**Guard scripts:**
+
+| Script | What it does |
+|---|---|
+| `not_null` | Error if the value is NULL |
+| `not_empty` | Error if the value is NULL or an empty string |
 
 Chain with `|`: `trim|uppercase` runs trim first, then uppercase.
-Scripts skip NULL values automatically (except `not_null`).
+Scripts skip NULL values automatically (except `not_null` and `not_empty`).
 
 Rules that matter:
 
@@ -201,7 +233,7 @@ loaded twice under one `file_id`.
 Two control tables are always generated:
 
 * `source_file` - file name, SHA-256, `source_ref` (the original reference:
-  Drive file ID, Sheets link, or local path), row count, load timestamp.
+  Drive file ID, Sheets link, or upload reference), row count, load timestamp.
   The hash is unique, so re-loading a byte-identical file is refused.
   An AI agent can read `source_ref` to trace back to the original file.
 * `load_config_audit` - for each table: the sheet, the row range/column

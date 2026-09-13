@@ -8,9 +8,10 @@ sees another's work. The parser itself is imported unchanged from tools/.
 """
 import logging
 import os
+from pathlib import Path
 
 import psycopg
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -424,25 +425,61 @@ def push(project_id: str, skip_audit: bool = Query(False),
 @app.get("/api/runs")
 def list_runs(user: dict = auth.Me, project_id: str | None = None,
               limit: int = Query(50, ge=1, le=200)) -> list:
+    con = state.connect()
+
+    # 1) Project pushes from the run table
     sql = ("SELECT r.*, p.name AS project_name FROM run r "
            "JOIN project p ON p.project_id = r.project_id WHERE r.user_id = %s")
-    params = [user["user_id"]]
+    params: list = [user["user_id"]]
     if project_id:
         sql += " AND r.project_id = %s"
         params.append(project_id)
     sql += " ORDER BY r.started_at DESC LIMIT %s"
     params.append(limit)
-    con = state.connect()
     rows = con.execute(sql, params).fetchall()
-    con.close()
-    return [{
+
+    items = [{
         "run_id": r["run_id"], "project_id": r["project_id"],
         "project_name": r["project_name"], "started_at": r["started_at"],
         "finished_at": r["finished_at"], "status": r["status"], "target": r["target"],
         "database": r["database"], "db_schema": r["db_schema"], "prefix": r["prefix"],
         "row_total": r["row_total"], "file_id": r["file_id"],
         "source_name": r["source_name"], "config_name": r["config_name"],
+        "origin": "project",
     } for r in rows]
+
+    # 2) Batch pushes — expand individual files from completed batches
+    if not project_id:
+        batch_rows = con.execute(
+            "SELECT batch_id, config_ref, target_json, results_json, created_at "
+            "FROM batch WHERE user_id = %s AND status IN ('done', 'partial') "
+            "ORDER BY created_at DESC", (user["user_id"],)).fetchall()
+        for b in batch_rows:
+            result = state.loads(b["results_json"], {})
+            target = result.get("target", state.loads(b["target_json"], {}))
+            for idx, f in enumerate(result.get("files", [])):
+                pushed = f.get("status") == "pushed"
+                items.append({
+                    "run_id": f"{b['batch_id']}:{idx}",
+                    "project_id": None,
+                    "project_name": None,
+                    "started_at": b["created_at"],
+                    "finished_at": b["created_at"],
+                    "status": "succeeded" if pushed else "failed",
+                    "target": target.get("target"),
+                    "database": target.get("database"),
+                    "db_schema": target.get("db_schema"),
+                    "prefix": target.get("prefix"),
+                    "row_total": f.get("rows", 0),
+                    "file_id": f.get("file_id") if pushed else None,
+                    "source_name": f.get("name", ""),
+                    "config_name": b["config_ref"],
+                    "origin": "batch",
+                })
+
+    con.close()
+    items.sort(key=lambda x: x["started_at"] or "", reverse=True)
+    return items[:limit]
 
 
 @app.get("/api/runs/{run_id}")
@@ -459,6 +496,227 @@ def get_run(run_id: str, user: dict = auth.Me) -> dict:
     out["rows_per_table"] = state.loads(row["rows_json"], {})
     out["issues"] = state.loads(row["issues_json"], [])
     return out
+
+
+# -------------------------------------------------------------- data viewer
+
+
+def _scan_audit_tables() -> list:
+    """Find all load_config_audit tables across every schema in the target DB.
+
+    Returns a flat list of file records, one per (file_id, schema) combination,
+    with per-table details aggregated. Works regardless of how the push happened
+    (project, batch, one-off upload).
+
+    Reuses state.connect() so it works in every environment (local, Docker,
+    production) without duplicating connection logic.
+    """
+    con = state.connect()
+
+    # Find every *load_config_audit table across all schemas
+    # (state.connect sets search_path to APP_SCHEMA, but information_schema
+    # queries work regardless of search_path)
+    audit_tables = con.execute(
+        "SELECT table_schema, table_name FROM information_schema.tables "
+        "WHERE table_name LIKE '%%load_config_audit' "
+        "AND table_schema NOT IN ('pg_catalog', 'information_schema', 'pg_toast', %s)",
+        (state.APP_SCHEMA,)).fetchall()
+
+    files: dict = {}   # file_id -> record
+    for at in audit_tables:
+        schema = at["table_schema"]
+        table = at["table_name"]
+        qualified = f'"{schema}"."{table}"'
+        try:
+            rows = con.execute(
+                f"SELECT file_id, file_name, file_sha256, source_ref, config_ref, "
+                f"table_name, sheet_name, header_row, data_start_row, data_end_row, "
+                f"column_count, row_count, loaded_at "
+                f"FROM {qualified} ORDER BY loaded_at DESC"
+            ).fetchall()
+        except Exception as exc:
+            log.warning("could not read %s: %s", qualified, exc)
+            continue
+
+        for r in rows:
+            fid = r["file_id"]
+            tbl = {
+                "table_name": r["table_name"], "sheet_name": r["sheet_name"],
+                "header_row": r["header_row"], "data_start_row": r["data_start_row"],
+                "data_end_row": r["data_end_row"], "column_count": r["column_count"],
+                "row_count": r["row_count"],
+                "loaded_at": str(r["loaded_at"]) if r["loaded_at"] else None,
+                "file_sha256": r["file_sha256"],
+            }
+            if fid not in files:
+                files[fid] = {
+                    "file_id": fid,
+                    "source_name": r["file_name"],
+                    "file_sha256": r["file_sha256"],
+                    "source_ref": r["source_ref"],
+                    "config_ref": r["config_ref"],
+                    "db_schema": schema if schema != "public" else "",
+                    "pushed_at": str(r["loaded_at"]) if r["loaded_at"] else None,
+                    "row_total": 0,
+                    "tables": [],
+                    "rows_per_table": {},
+                }
+            files[fid]["tables"].append(tbl)
+            files[fid]["row_total"] += r["row_count"] or 0
+            files[fid]["rows_per_table"][r["table_name"]] = r["row_count"] or 0
+            # Keep the earliest loaded_at as the push time
+            if r["loaded_at"]:
+                ts = str(r["loaded_at"])
+                existing = files[fid]["pushed_at"]
+                if not existing or ts < existing:
+                    files[fid]["pushed_at"] = ts
+
+    con.close()
+    return sorted(files.values(), key=lambda f: f.get("pushed_at") or "", reverse=True)
+
+
+@app.get("/api/data-viewer/files")
+def data_viewer_files(user: dict = auth.Me,
+                      search: str = Query("", max_length=200),
+                      limit: int = Query(100, ge=1, le=500)) -> list:
+    """List all pushed files from load_config_audit in the target database.
+
+    This is the single source of truth — works for project pushes, batch pushes,
+    and one-off uploads alike.
+    """
+    all_files = _scan_audit_tables()
+    q = search.strip().lower()
+    if q:
+        all_files = [f for f in all_files
+                     if q in (f.get("source_name") or "").lower()
+                     or q in (f.get("config_ref") or "").lower()
+                     or q in (f.get("db_schema") or "").lower()
+                     or q in (f.get("file_id") or "").lower()]
+    return all_files[:limit]
+
+
+@app.get("/api/data-viewer/files/{file_id}")
+def data_viewer_file_detail(file_id: str, user: dict = auth.Me) -> dict:
+    """Detailed metadata for one pushed file from load_config_audit."""
+    all_files = _scan_audit_tables()
+    for f in all_files:
+        if f["file_id"] == file_id:
+            return f
+    raise HTTPException(status_code=404,
+                        detail=f"File not found: no data has been loaded with file_id "
+                               f"'{file_id}'. It may have been rolled back or the database "
+                               f"was cleared. Refresh the Data Viewer to see current files.")
+
+
+@app.post("/api/data-viewer/files/{file_id}/rollback")
+def data_viewer_rollback(file_id: str, user: dict = auth.Me,
+                         _: None = Depends(csrf)) -> dict:
+    """Delete all rows loaded by a specific file_id and remove audit records.
+
+    The entire operation runs in one transaction — if any table fails,
+    nothing is deleted. The run/batch record in the app schema is updated
+    to 'rolled_back' status.
+    """
+    # Find the file in audit tables to get schema/prefix info
+    all_files = _scan_audit_tables()
+    target_file = None
+    for f in all_files:
+        if f["file_id"] == file_id:
+            target_file = f
+            break
+    if target_file is None:
+        raise HTTPException(status_code=404,
+                            detail=f"Cannot rollback: no data found for file_id '{file_id}'. "
+                                   f"The file may have already been rolled back or the "
+                                   f"database was cleared.")
+
+    db_schema = target_file.get("db_schema") or None
+
+    try:
+        import psycopg
+        from psycopg.rows import dict_row as _dr
+
+        # Connect directly to the target schema (not through state.connect()
+        # which locks search_path to the app schema)
+        state._load_env()
+        url = os.environ.get("DATABASE_URL")
+        if url:
+            con = psycopg.connect(url, row_factory=_dr)
+        else:
+            con = psycopg.connect(
+                host=os.environ.get("PGHOST", "localhost"),
+                port=os.environ.get("PGPORT", "5432"),
+                dbname=os.environ.get("PGDATABASE", "excel_parser"),
+                user=os.environ.get("PGUSER", ""),
+                password=os.environ.get("PGPASSWORD", ""),
+                row_factory=_dr,
+            )
+        schema = db_schema or "public"
+        con.execute(f'SET search_path TO "{schema}"')
+
+        # Find the audit table name (may have a prefix, e.g. swiggy_load_config_audit)
+        audit_table_row = con.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = %s AND table_name LIKE '%%load_config_audit'",
+            (schema,)).fetchone()
+        if not audit_table_row:
+            con.close()
+            raise HTTPException(status_code=404,
+                                detail=f"No audit table found in schema '{schema}'. "
+                                       f"The target schema may have been dropped.")
+        audit_table = audit_table_row["table_name"]
+
+        # Find tables from audit
+        audit_rows = con.execute(
+            f'SELECT table_name FROM "{audit_table}" WHERE file_id = %s',
+            (file_id,)).fetchall()
+        if not audit_rows:
+            con.close()
+            raise HTTPException(status_code=404,
+                                detail=f"No audit records found for file_id '{file_id}' in "
+                                       f"schema '{schema}'. The data may have "
+                                       f"already been deleted.")
+
+        # Count rows per table, then delete
+        deleted = {}
+        total = 0
+        for r in audit_rows:
+            table = r["table_name"]
+            count_row = con.execute(
+                f'SELECT count(*) as c FROM "{table}" WHERE file_id = %s',
+                (file_id,)).fetchone()
+            count = count_row["c"] if count_row else 0
+            con.execute(f'DELETE FROM "{table}" WHERE file_id = %s', (file_id,))
+            deleted[table] = count
+            total += count
+
+        # Delete audit records
+        con.execute(f'DELETE FROM "{audit_table}" WHERE file_id = %s', (file_id,))
+        con.commit()
+        con.close()
+
+        # Update app state: mark run as rolled_back
+        app_con = state.connect()
+        app_con.execute(
+            "UPDATE run SET status = 'rolled_back' WHERE file_id = %s AND user_id = %s",
+            (file_id, user["user_id"]))
+        app_con.commit()
+        app_con.close()
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("rollback failed for file %s: %s", file_id, exc, exc_info=True)
+        raise HTTPException(status_code=500,
+                            detail=f"Rollback failed for '{target_file.get('source_name', file_id)}' "
+                                   f"— the operation was aborted and no data was deleted. "
+                                   f"Please try again or contact support if the issue persists.") from exc
+
+    return {
+        "rolled_back": True, "file_id": file_id,
+        "rows_deleted": deleted, "total_deleted": total,
+        "source_name": target_file.get("source_name"),
+    }
 
 
 # ----------------------------------------------------------------- batch
@@ -520,6 +778,308 @@ def batch_push(body: BatchIn, user: dict = auth.Me,
     return {"batch_id": batch_id, **result}
 
 
+MAX_UPLOAD_FILES = 20
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB per file
+UPLOAD_SUFFIXES = {".xlsx", ".xlsm", ".csv"}
+
+
+def _save_uploads(files: list[UploadFile]) -> list[tuple]:
+    """Write uploaded files to temp paths; return [(name, Path), ...].
+
+    The files are saved to a temp directory and cleaned up by the caller.
+    Nothing is kept on disk after the request completes.
+    """
+    import shutil
+    import tempfile
+    if len(files) > MAX_UPLOAD_FILES:
+        raise HTTPException(status_code=400,
+                            detail=f"too many files — maximum is {MAX_UPLOAD_FILES}")
+    if not files:
+        raise HTTPException(status_code=400, detail="no files uploaded")
+    tmp = Path(tempfile.mkdtemp(prefix="ep_upload_"))
+    saved = []
+    for f in files:
+        name = f.filename or "unnamed.xlsx"
+        suffix = Path(name).suffix.lower()
+        if suffix not in UPLOAD_SUFFIXES:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise HTTPException(status_code=400,
+                                detail=f"{name}: only .xlsx and .csv files are accepted")
+        dest = tmp / f"{len(saved)}_{name}"
+        with open(dest, "wb") as out:
+            shutil.copyfileobj(f.file, out)
+        if dest.stat().st_size > MAX_UPLOAD_BYTES:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise HTTPException(status_code=400,
+                                detail=f"{name}: file too large (max {MAX_UPLOAD_BYTES // 1024 // 1024} MB)")
+        saved.append((name, dest))
+    return saved, tmp
+
+
+@app.post("/api/batch/validate-upload")
+def batch_validate_upload(request: Request,
+                          files: list[UploadFile] = File(...),
+                          config_ref: str = Form(...)) -> dict:
+    """Validate uploaded source files in-memory. Nothing is saved to disk after the request."""
+    user = auth.current_user(request)
+    auth.check_csrf(request)
+    import shutil
+    saved, tmp = _save_uploads(files)
+    try:
+        config = batchmod.resolve_config(config_ref, user["user_id"])
+        results = []
+        seen_sha = {}
+        for name, path in saved:
+            result = batchmod.validate_file(config, name, user["user_id"], {},
+                                            target_schema=None, source_path=path)
+            result["name"] = name
+            result["ref"] = name
+            # Check for duplicate content within this batch
+            sha = result.get("sha256", "")
+            if sha and result["status"] == "valid" and sha in seen_sha:
+                result["status"] = "error"
+                result["message"] = f"duplicate content — identical to {seen_sha[sha]}"
+            elif sha:
+                seen_sha[sha] = name
+            results.append(result)
+        all_valid = all(r["status"] == "valid" for r in results)
+        return {"results": results, "all_valid": all_valid,
+                "total": len(results),
+                "valid": sum(1 for r in results if r["status"] == "valid"),
+                "errors": sum(1 for r in results if r["status"] == "error")}
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@app.post("/api/batch/validate-one")
+def batch_validate_one(request: Request,
+                       file: UploadFile = File(...),
+                       config_ref: str = Form(...)) -> dict:
+    """Validate a single uploaded file. Returns one result dict."""
+    user = auth.current_user(request)
+    auth.check_csrf(request)
+    import shutil, tempfile
+    tmp = Path(tempfile.mkdtemp(prefix="ep_val_"))
+    name = file.filename or "unnamed.xlsx"
+    suffix = Path(name).suffix.lower()
+    if suffix not in UPLOAD_SUFFIXES:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise HTTPException(status_code=400,
+                            detail=f"{name}: only .xlsx and .csv files are accepted")
+    dest = tmp / name
+    with open(dest, "wb") as out:
+        shutil.copyfileobj(file.file, out)
+    if dest.stat().st_size > MAX_UPLOAD_BYTES:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise HTTPException(status_code=400,
+                            detail=f"{name}: file too large (max {MAX_UPLOAD_BYTES // 1024 // 1024} MB)")
+    try:
+        config = batchmod.resolve_config(config_ref, user["user_id"])
+        result = batchmod.validate_file(config, name, user["user_id"], {},
+                                        target_schema=None, source_path=dest)
+        result["name"] = name
+        result["ref"] = name
+        if result.get("status") != "valid":
+            log.info("validate-one %s: %s — %s", name, result.get("status"), result.get("message"))
+        return result
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _record_batch(user_id: str, config_ref: str, file_results: list,
+                   target_info: dict | None = None):
+    """Record a batch push (one or more files) in the batch table."""
+    batch_id = state.new_id()
+    target = target_info or {}
+    pushed = sum(1 for f in file_results if f.get("status") == "pushed")
+    failed = sum(1 for f in file_results if f.get("status") != "pushed")
+    total_rows = sum(f.get("rows", 0) for f in file_results)
+    results = {
+        "files": file_results, "total_rows": total_rows,
+        "pushed": pushed, "failed": failed,
+        "total": len(file_results), "target": target,
+    }
+    ts = state.now()
+    con = state.connect()
+    with con:
+        con.execute(
+            "INSERT INTO batch (batch_id, user_id, config_ref, source_refs, target_json, "
+            "status, results_json, created_at, updated_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (batch_id, user_id, config_ref,
+             state.dumps([f.get("name", "") for f in file_results]),
+             state.dumps(target),
+             "done" if failed == 0 else "partial",
+             state.dumps(results), ts, ts))
+    con.close()
+    return batch_id
+
+
+@app.post("/api/batch/push-one")
+def batch_push_one(request: Request,
+                   file: UploadFile = File(...),
+                   config_ref: str = Form(...)) -> dict:
+    """Validate and push a single uploaded file. Nothing saved after the request."""
+    user = auth.current_user(request)
+    auth.check_csrf(request)
+    import shutil, tempfile
+    tmp = Path(tempfile.mkdtemp(prefix="ep_push_"))
+    name = file.filename or "unnamed.xlsx"
+    suffix = Path(name).suffix.lower()
+    if suffix not in UPLOAD_SUFFIXES:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise HTTPException(status_code=400, detail=f"{name}: only .xlsx and .csv files are accepted")
+    dest = tmp / name
+    with open(dest, "wb") as out:
+        shutil.copyfileobj(file.file, out)
+    try:
+        config = batchmod.resolve_config(config_ref, user["user_id"])
+        # Validate first
+        vresult = batchmod.validate_file(config, name, user["user_id"], {},
+                                         source_path=dest)
+        if vresult["status"] != "valid":
+            entry = {"ref": name, "name": name, "status": "failed",
+                     "message": vresult["message"], "rows": 0}
+            _record_batch(user["user_id"], config_ref, [entry])
+            return entry
+        # Push
+        where = service.engine.validator.resolve_target(config)
+        sheets, columns = service.engine.validator.read_config(config)
+        schema_sql = service.engine.validator.render_ddl(
+            sheets, columns, where.target, where.prefix, where.id_type)
+        database = service.sqlite_path(where.database) if where.target == "sqlite" \
+            else where.database
+        service.engine.dbmod.load_env(state.PROJECT_ROOT / ".env")
+        lines = []
+        result = service.engine.executor.execute(
+            config, dest, where.target, database, where.prefix,
+            schema_sql, 0, lines.append, where.id_type, strict=True,
+            source_ref=f"upload:{name}", config_ref=config_ref)
+        entry = {"ref": name, "name": name, "status": "pushed",
+                 "file_id": result.file_id, "rows": result.total,
+                 "per_table": result.per_table}
+        target_info = {"target": where.target, "database": database or "",
+                       "db_schema": where.db_schema or "", "prefix": where.prefix or ""}
+        _record_batch(user["user_id"], config_ref, [entry], target_info)
+        return entry
+    except (SystemExit, Exception) as exc:
+        entry = {"ref": name, "name": name, "status": "failed",
+                 "message": str(exc), "rows": 0}
+        _record_batch(user["user_id"], config_ref, [entry])
+        return entry
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@app.post("/api/batch/push-upload")
+def batch_push_upload(request: Request,
+                      files: list[UploadFile] = File(...),
+                      config_ref: str = Form(...)) -> dict:
+    """Validate and push uploaded source files. Nothing is saved after the request."""
+    user = auth.current_user(request)
+    auth.check_csrf(request)
+    import shutil
+    saved, tmp = _save_uploads(files)
+    try:
+        config = batchmod.resolve_config(config_ref, user["user_id"])
+        # Validate all first
+        for name, path in saved:
+            result = batchmod.validate_file(config, name, user["user_id"], {},
+                                            source_path=path)
+            if result["status"] != "valid":
+                raise HTTPException(status_code=400, detail={
+                    "message": f"{name}: {result['message']}",
+                    "files": [result]})
+
+        # Build DDL once
+        overrides = {}
+        where = service.engine.validator.resolve_target(
+            config, overrides.get("target"), overrides.get("database"),
+            overrides.get("prefix"), overrides.get("id_type"))
+        sheets, columns = service.engine.validator.read_config(config)
+        schema_sql = service.engine.validator.render_ddl(
+            sheets, columns, where.target, where.prefix, where.id_type)
+        if where.target == "sqlite":
+            database = service.sqlite_path(where.database)
+        else:
+            database = overrides.get("database") or where.database
+
+        service.engine.dbmod.load_env(state.PROJECT_ROOT / ".env")
+        file_results = []
+        total_rows = 0
+        for name, path in saved:
+            lines = []
+            sname = Path(name).stem if path.suffix.lower() == ".csv" else None
+            try:
+                result = service.engine.executor.execute(
+                    config, path, where.target, database, where.prefix,
+                    schema_sql, 0, lines.append, where.id_type, strict=True,
+                    source_ref=f"upload:{name}", config_ref=config_ref,
+                    source_name=sname)
+                file_results.append({
+                    "ref": name, "name": name, "status": "pushed",
+                    "file_id": result.file_id, "rows": result.total,
+                    "per_table": result.per_table})
+                total_rows += result.total
+            except (SystemExit, Exception) as exc:
+                file_results.append({
+                    "ref": name, "name": name, "status": "failed",
+                    "message": str(exc), "rows": 0})
+                break
+
+        pushed = sum(1 for f in file_results if f["status"] == "pushed")
+        failed = sum(1 for f in file_results if f["status"] == "failed")
+        target_info = {"target": where.target, "database": database or "",
+                       "db_schema": where.db_schema or "", "prefix": where.prefix or ""}
+
+        # Record in batch table
+        _record_batch(user["user_id"], config_ref, file_results, target_info)
+
+        return {
+            "files": file_results, "total_rows": total_rows,
+            "pushed": pushed, "failed": failed, "total": len(saved),
+            "target": target_info}
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# --------------------------------------------------------- browser upload
+
+
+@app.post("/api/upload-workbook")
+def upload_workbook(file: UploadFile = File(...), user: dict = auth.Me,
+                    _: None = Depends(csrf)) -> dict:
+    """Accept a single workbook uploaded via the File System Access API.
+
+    The file is saved to cache/ under a content-addressed name so that the
+    same bytes always map to the same ref. Returns an ``upload:<hash>.<ext>``
+    ref that resolve() and fingerprint() understand.
+    """
+    import hashlib
+
+    name = file.filename or "unnamed.xlsx"
+    suffix = Path(name).suffix.lower()
+    if suffix not in UPLOAD_SUFFIXES:
+        raise HTTPException(status_code=400,
+                            detail=f"{name}: only .xlsx and .csv files are accepted")
+
+    data = file.file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400,
+                            detail=f"{name}: file too large "
+                                   f"(max {MAX_UPLOAD_BYTES // 1024 // 1024} MB)")
+
+    sha = hashlib.sha256(data).hexdigest()[:24]
+    cache = sources.CACHE
+    cache.mkdir(parents=True, exist_ok=True)
+    dest = cache / f"{sha}{suffix}"
+    dest.write_bytes(data)
+
+    from urllib.parse import quote
+    ref = f"upload:{dest.name}?name={quote(name)}"
+    return {"ref": ref, "name": name, "size": len(data), "sha256": sha}
+
+
 # ------------------------------------------------------- dev path browsing
 
 
@@ -551,22 +1111,6 @@ def auto_config(body: dict, user: dict = auth.Me) -> dict:
     return {"ok": True, "config_ref": str(result), "name": result.name}
 
 
-@app.get("/api/local-workbooks")
-def local_workbooks(user: dict = auth.Me) -> dict:
-    """The .xlsx and .csv files inside the project - the only local paths accepted."""
-    return {"root": str(state.PROJECT_ROOT), "files": sources.list_workbooks()}
-
-
-@app.get("/api/workbook-dir")
-def browse_workbook_dir(user: dict = auth.Me,
-                        folder: str = Query("", max_length=500)) -> dict:
-    """Browse .xlsx files in the configured WORKBOOK_DIR."""
-    try:
-        return sources.browse_workbook_dir(folder)
-    except sources.SourceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
 @app.post("/api/test-ref")
 def test_ref(body: dict, user: dict = auth.Me) -> dict:
     """Test whether a workbook reference is accessible and valid.
@@ -585,8 +1129,11 @@ def test_ref(body: dict, user: dict = auth.Me) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     import csv_adapter
+    sname = None
+    if path.suffix.lower() == ".csv" and sources.looks_like_upload(ref):
+        sname = Path(sources.upload_original_name(ref)).stem
     try:
-        wb = csv_adapter.open_source(path)
+        wb = csv_adapter.open_source(path, sname)
         sheets = wb.sheetnames
         wb.close()
     except Exception as exc:
@@ -606,7 +1153,8 @@ def test_ref(body: dict, user: dict = auth.Me) -> dict:
                                        f"{', '.join(missing)}. A configuration workbook must "
                                        f"have sheet_config and column_config sheets.")
 
-    return {"ok": True, "name": path.name, "sheets": sheets,
+    display = sources.upload_original_name(ref) if sources.looks_like_upload(ref) else path.name
+    return {"ok": True, "name": display, "sheets": sheets,
             "size": path.stat().st_size, "role": role}
 
 

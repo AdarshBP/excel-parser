@@ -73,8 +73,8 @@ Open <http://localhost:8000> (frontend is built and served by FastAPI).
 ### Design mode (`/project/:id`)
 
 1. **New configuration** — name + source workbook + configuration workbook.
-   Each field supports: **File path** (from WORKBOOK_DIR), **Direct link**
-   (Google Sheets URL), or **Google Drive** (OAuth picker).
+   Each field supports: **Browse** (local file upload from your computer),
+   **Link** (Google Sheets URL), or **Drive** (Google Drive OAuth picker).
 2. **Render** — reads both workbooks:
    * **ER diagram**: draggable table boxes, zoom, FK relationship edges,
      lineage edges to `source_file`. Click a table to preview its data.
@@ -89,20 +89,31 @@ Open <http://localhost:8000> (frontend is built and served by FastAPI).
 
 ### Batch mode (`/batch`)
 
-1. Select one **configuration** workbook (file, link, or Drive).
-2. Add multiple **source files** — browse, paste paths, or pick from Drive.
+1. Select one **configuration** workbook (upload, link, or Drive).
+2. Add multiple **source files** — upload from your computer or pick from Drive.
 3. **Validate all** — each file is checked independently. Duplicate files
-   (same path or same SHA-256) are rejected.
+   (same SHA-256 content) are rejected.
 4. **Push all** — only available when every file passes validation.
    Each file gets its own `file_id`. Batch stops on first failure.
+   Every batch push (including per-file uploads) is recorded and appears
+   in Push history.
+
+### Data Viewer (`/data-viewer`)
+
+Browse all files that have been pushed to the database — from both project
+pushes and batch pushes. Search by file name, project name, or database.
+Click a file to see per-table breakdown with audit metadata
+(`load_config_audit`). Enable via the toggle in Settings.
 
 ### Side navigation
 
-Collapsible sidebar (hover to expand):
-* **My work** — saved configurations + push history
+Always-expanded sidebar:
+* **Configurations** — saved configurations + push history
 * **Batch run** — multi-file processing
-* Theme toggle (dark/light), user info, sign out
-* **Settings** (gear icon in footer) — poll interval, Drive status, about
+* **Data Viewer** — browse pushed files (optional, enable in Settings)
+* **Push history** — unified timeline of all pushes (project + batch)
+* Theme toggle (dark/light), user avatar with sign out
+* **Settings** (gear icon) — poll interval, Drive status, feature toggles
 
 ### Settings (`/settings`)
 
@@ -164,6 +175,5 @@ Environment variables:
 - `APP_SCHEMA` — app state schema (default: `excelparser_config`)
 - `APP_ENV=production` — secure cookies
 - `APP_ALLOWED_ORIGINS` — CORS origins
-- `WORKBOOK_DIR` — optional, for file browsing inside the container
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` — optional, for Drive
 - `GOOGLE_API_KEY` — optional, for Google Picker UI (Drive file selection)

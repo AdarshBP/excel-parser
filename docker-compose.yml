@@ -1,49 +1,49 @@
-# Dev stack: app + PostgreSQL.
+# Excel Parser — production deployment (pull from Docker Hub).
 #
-#   docker compose up              # starts both
-#   docker compose up -d db        # just PG (for local dev with ./run.sh)
+#   docker compose up -d                  # start everything
+#   docker compose pull                   # pull latest images
+#   docker compose logs -f                # follow all logs
 #
-# The app reads .env for PG credentials. Override with environment: in services.
+# Prerequisites:
+#   1. Create a .env file with your PostgreSQL credentials and app settings
+#
+# On first run, create the default user:
+#   docker compose exec backend python3 users.py add admin
 
 services:
-  db:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: cos_user
-      POSTGRES_PASSWORD: cos_password
-      POSTGRES_DB: excel_parser
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cos_user -d excel_parser"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
 
-  app:
-    build: .
+  # ── FastAPI backend (API only) ──
+  backend:
+    image: ${DOCKER_REGISTRY:-adarshbp}/excel-parser-backend:${TAG:-latest}
+    container_name: excel-parser-backend
     restart: unless-stopped
-    ports:
-      - "8000:8000"
     env_file: .env
     environment:
-      PGHOST: db
-      PGPORT: 5432
-      PGUSER: cos_user
-      PGPASSWORD: cos_password
-      PGDATABASE: excel_parser
-      APP_SCHEMA: excelparser_config
       APP_ENV: production
-    depends_on:
-      db:
-        condition: service_healthy
+      APP_SCHEMA: ${APP_SCHEMA:-excelparser_config}
+      APP_ALLOWED_ORIGINS: ${APP_ALLOWED_ORIGINS:-http://localhost:4200}
+      PYTHONUNBUFFERED: 1
     volumes:
-      # Mount examples and exports so WORKBOOK_DIR works
-      - ./examples:/app/examples:ro
-      - ./exports:/app/exports:ro
+      - backend-cache:/excel_parser/app/cache
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ── Angular frontend (nginx: serves SPA + proxies /api → backend) ──
+  frontend:
+    image: ${DOCKER_REGISTRY:-adarshbp}/excel-parser-frontend:${TAG:-latest}
+    container_name: excel-parser-frontend
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-4200}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
 
 volumes:
-  pgdata:
+  backend-cache:

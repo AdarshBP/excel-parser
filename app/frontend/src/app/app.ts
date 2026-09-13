@@ -23,24 +23,30 @@ import { Settings } from './core/settings';
       <div class="shell">
         <nav class="sidenav">
           <div class="nav-brand" routerLink="/work">
-            <i class="pi pi-th-large"></i>
-            <span class="nav-text">Excel Parser</span>
+            <span class="brand-icon">EP</span>
+            <span class="brand-text">Excel Parser</span>
           </div>
 
           <div class="nav-links">
             <a class="nav-item" routerLink="/work" routerLinkActive="active"
                [routerLinkActiveOptions]="{ exact: true }">
               <i class="pi pi-briefcase"></i>
-              <span class="nav-text">My work</span>
+              <span>Configurations</span>
             </a>
             <a class="nav-item" routerLink="/batch" routerLinkActive="active">
               <i class="pi pi-upload"></i>
-              <span class="nav-text">Batch run</span>
+              <span>Batch run</span>
             </a>
+            @if (settings.dataViewer()) {
+              <a class="nav-item" routerLink="/data-viewer" routerLinkActive="active">
+                <i class="pi pi-database"></i>
+                <span>Data Viewer</span>
+              </a>
+            }
             @if (settings.auditLog()) {
               <a class="nav-item" routerLink="/history" routerLinkActive="active">
                 <i class="pi pi-clock"></i>
-                <span class="nav-text">Push history</span>
+                <span>Push history</span>
               </a>
             }
           </div>
@@ -50,23 +56,20 @@ import { Settings } from './core/settings';
           <div class="nav-footer">
             <a class="nav-item" routerLink="/help" routerLinkActive="active">
               <i class="pi pi-question-circle"></i>
-              <span class="nav-text">Help</span>
+              <span>Help</span>
             </a>
             <a class="nav-item" routerLink="/settings" routerLinkActive="active">
               <i class="pi pi-cog"></i>
-              <span class="nav-text">Settings</span>
+              <span>Settings</span>
             </a>
             <div class="nav-item" (click)="toggleTheme()">
               <i class="pi" [class.pi-moon]="!dark()" [class.pi-sun]="dark()"></i>
-              <span class="nav-text">{{ dark() ? 'Light' : 'Dark' }}</span>
+              <span>{{ dark() ? 'Light' : 'Dark' }}</span>
             </div>
-            <div class="nav-item nav-user">
-              <i class="pi pi-user"></i>
-              <span class="nav-text">{{ user.username }}</span>
-            </div>
-            <div class="nav-item" (click)="signOut()">
-              <i class="pi pi-sign-out"></i>
-              <span class="nav-text">Sign out</span>
+            <div class="nav-user" (click)="signOut()" pTooltip="Sign out" tooltipPosition="right">
+              <span class="user-avatar">{{ user.username.charAt(0).toUpperCase() }}</span>
+              <span class="user-name">{{ user.username }}</span>
+              <i class="pi pi-chevron-right user-chevron"></i>
             </div>
           </div>
         </nav>
@@ -82,48 +85,60 @@ import { Settings } from './core/settings';
   styles: `
     .shell { display: flex; height: 100vh; overflow: hidden; }
 
-    /* ── side nav: collapsed by default, expands on hover ── */
-    .sidenav { width: 3.25rem; display: flex; flex-direction: column; flex-shrink: 0;
-               background: var(--surface); border-right: 1px solid var(--border);
-               box-shadow: 2px 0 8px rgba(0,0,0,.04);
-               transition: width .2s ease; overflow: hidden; z-index: 10; }
-    .sidenav:hover { width: 13rem; }
+    /* ── side nav: always expanded ── */
+    .sidenav { width: 12.5rem; display: flex; flex-direction: column; flex-shrink: 0;
+               background: var(--sidebar-bg); border-right: 1px solid var(--sidebar-border);
+               overflow: hidden; z-index: 10; }
 
-    .nav-text { opacity: 0; white-space: nowrap; transition: opacity .15s ease;
-                overflow: hidden; }
-    .sidenav:hover .nav-text { opacity: 1; }
+    .nav-brand { display: flex; align-items: center; gap: .55rem; padding: .85rem .75rem;
+                 font-weight: 700; font-size: .9rem; cursor: pointer; white-space: nowrap; }
+    .brand-icon { display: flex; align-items: center; justify-content: center;
+                  width: 1.75rem; height: 1.75rem; background: var(--primary);
+                  border-radius: 6px; color: #fff; font-size: .65rem; font-weight: 800;
+                  flex-shrink: 0; letter-spacing: .02em; }
+    .brand-text { font-size: .88rem; }
 
-    .nav-brand { display: flex; align-items: center; gap: .6rem; padding: .85rem .75rem;
-                 font-weight: 700; font-size: .9rem; cursor: pointer;
-                 border-bottom: 1px solid var(--border); white-space: nowrap; }
-    .nav-brand .pi { font-size: 1rem; flex-shrink: 0; width: 1.5rem; text-align: center; }
+    .nav-links { display: flex; flex-direction: column; gap: .15rem; padding: .5rem .5rem; }
 
-    .nav-links { display: flex; flex-direction: column; gap: .15rem; padding: .5rem .4rem; }
-
-    .nav-item { display: flex; align-items: center; gap: .6rem; padding: .5rem .6rem;
+    .nav-item { display: flex; align-items: center; gap: .55rem; padding: .5rem .6rem;
                 font-size: .8rem; color: var(--text-secondary); cursor: pointer;
                 border-radius: var(--radius-sm); transition: all .15s;
                 white-space: nowrap; text-decoration: none; }
-    .nav-item:hover { color: var(--text); background: var(--surface-hover); }
-    .nav-item.active { color: var(--primary); background: var(--primary-soft);
-                       font-weight: 600; }
-    .nav-item .pi { font-size: .85rem; flex-shrink: 0; width: 1.5rem; text-align: center; }
+    .nav-item:hover { color: var(--text); background: var(--surface-hover);
+                      text-decoration: none; }
+    .nav-item.active { color: #fff; background: var(--primary); font-weight: 600; }
+    .nav-item .pi { font-size: .82rem; flex-shrink: 0; width: 1.25rem; text-align: center; }
 
     .nav-spacer { flex: 1; }
 
     .nav-footer { display: flex; flex-direction: column; gap: .15rem;
-                  padding: .5rem .4rem; border-top: 1px solid var(--border); }
-    .nav-user { font-weight: 500; }
+                  padding: .5rem .5rem; border-top: 1px solid var(--border); }
+
+    .nav-user { display: flex; align-items: center; gap: .5rem; padding: .55rem .6rem;
+                cursor: pointer; border-radius: var(--radius-sm); transition: all .15s;
+                margin-top: .15rem; }
+    .nav-user:hover { background: var(--surface-hover); }
+    .user-avatar { display: flex; align-items: center; justify-content: center;
+                   width: 1.6rem; height: 1.6rem; background: var(--primary);
+                   border-radius: 50%; color: #fff; font-size: .65rem; font-weight: 700;
+                   flex-shrink: 0; }
+    .user-name { font-size: .8rem; font-weight: 500; color: var(--text); flex: 1; }
+    .user-chevron { font-size: .6rem; color: var(--text-secondary); }
 
     /* ── content area ── */
     .content { flex: 1; overflow-y: auto; min-width: 0; }
 
-    /* ── tablet landscape: narrower sidenav ── */
-    @media (max-width: 1024px) and (orientation: landscape) {
-      .sidenav { width: 2.75rem; }
-      .sidenav:hover { width: 11rem; }
-      .nav-brand { padding: .65rem .55rem; font-size: .82rem; }
-      .nav-item { padding: .4rem .5rem; font-size: .75rem; }
+    /* ── tablet: collapse sidenav to icons ── */
+    @media (max-width: 1024px) {
+      .sidenav { width: 3rem; }
+      .sidenav span:not(.brand-icon):not(.user-avatar) { display: none; }
+      .nav-brand { padding: .65rem .55rem; justify-content: center; }
+      .nav-links { padding: .5rem .3rem; }
+      .nav-item { padding: .5rem; justify-content: center; }
+      .nav-item .pi { width: auto; }
+      .nav-footer { padding: .5rem .3rem; }
+      .nav-user { justify-content: center; padding: .5rem; }
+      .user-chevron { display: none; }
     }
   `,
 })

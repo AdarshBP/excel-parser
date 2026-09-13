@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="google-site-verification" content="GhWO0gAa4s9ReD6pTksN2392RA9R6ETeLOeE0sFwemk" />
+  <title>Excel Parser</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #333; background: #f8f9fa; }
+    .hero { background: linear-gradient(135deg, #1a73e8 0%, #0d47a1 100%); color: white; padding: 80px 20px; text-align: center; }
+    .hero h1 { font-size: 2.5rem; margin-bottom: 16px; }
+    .hero p { font-size: 1.2rem; opacity: 0.9; max-width: 600px; margin: 0 auto 32px; line-height: 1.6; }
+    .hero a { display: inline-block; background: white; color: #1a73e8; padding: 12px 32px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 1rem; }
+    .hero a:hover { background: #e8f0fe; }
+    .features { max-width: 900px; margin: 60px auto; padding: 0 20px; }
+    .features h2 { text-align: center; margin-bottom: 40px; font-size: 1.6rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 24px; }
+    .card { background: white; border-radius: 8px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    .card h3 { margin-bottom: 8px; color: #1a73e8; }
+    .card p { color: #666; line-height: 1.5; font-size: 0.95rem; }
+    .footer { text-align: center; padding: 40px 20px; color: #888; font-size: 0.9rem; }
+    .footer a { color: #1a73e8; text-decoration: none; margin: 0 12px; }
+  </style>
+</head>
+<body>
+  <div class="hero">
+    <h1>Excel Parser</h1>
+    <p>
+      A configuration-driven tool that reads Excel and CSV workbooks and loads
+      structured data into PostgreSQL. Connect Google Drive, preview your schema,
+      validate data quality, and push — all from a single web interface.
+    </p>
+    <a href="/login">Sign In</a>
+  </div>
+
+  <div class="features">
+    <h2>What Excel Parser does</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Config-driven parsing</h3>
+        <p>Define your schema in a configuration workbook — table names, column types,
+           row ranges. The parser reads exactly what you configure, nothing more.</p>
+      </div>
+      <div class="card">
+        <h3>Multiple sources</h3>
+        <p>Load workbooks from local files, Google Sheets links, or Google Drive.
+           Batch mode processes multiple files against one config in a single run.</p>
+      </div>
+      <div class="card">
+        <h3>Schema preview</h3>
+        <p>See your generated tables as an ER diagram, preview data rows with
+           type casting, and catch validation issues before pushing anything.</p>
+      </div>
+      <div class="card">
+        <h3>Strict data quality</h3>
+        <p>Type mismatches and missing required columns block the push.
+           Every row carries its source file, sheet, and row number for traceability.</p>
+      </div>
+      <div class="card">
+        <h3>Google Drive integration</h3>
+        <p>Connect your Google account, pick files with the native Google Picker,
+           and the app downloads and parses them automatically. Read-only access only.</p>
+      </div>
+      <div class="card">
+        <h3>PostgreSQL output</h3>
+        <p>Data lands in PostgreSQL with proper types, indexes on key columns,
+           and full load audit trail. Each file gets a unique file_id for lineage.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <a href="/privacy">Privacy Policy</a>
+    <a href="/terms">Terms of Service</a>
+    <p style="margin-top: 16px;">&copy; 2026 Excel Parser</p>
+  </div>
+</body>
+</html>

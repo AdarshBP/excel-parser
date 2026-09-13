@@ -102,7 +102,8 @@ Exit code 0 means loadable, 1 means it is not. What it checks:
 | `table_name` / `column_name` are usable, unique, not reserved lineage names | `col:` letters are inside the used range |
 | `data_type` is one of the six supported types | every configured cell converts to its `data_type` |
 | `data_start_row` / `data_end_row` / `header_row` are sane whole numbers | rows that would be skipped for an empty `nullable = N` column |
-| `source_ref` is a `col:<letter>` reference | tables that would load 0 rows |
+| `source_ref` is a valid reference (`col:`, `const:`, `fn:`, `expr:`, or `map:`) | tables that would load 0 rows |
+| `row_filter` syntax is valid (if set) | |
 | `layout`, `nullable`, `is_key` hold allowed values | |
 | `target_config` names a real target, database, schema and prefix - and no credentials | |
 
@@ -237,6 +238,20 @@ and both loads stay separately queryable. A byte-identical file is refused:
 sales_source.xlsx has already been loaded into this database (identical content);
 nothing was inserted
 ```
+
+---
+
+## Regression test
+
+Run every example through validator and executor, comparing row counts:
+
+```bash
+./util/test-examples.sh              # validate + push all examples to PostgreSQL
+./util/test-examples.sh --validate   # validate only, no push
+```
+
+14 examples tested (09-11 skipped if client files absent). Examples 07 and 08
+must fail validation. All others must match their expected row count exactly.
 
 ---
 

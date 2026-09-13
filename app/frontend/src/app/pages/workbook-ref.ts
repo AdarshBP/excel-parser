@@ -1,31 +1,29 @@
 import { Component, OnDestroy, effect, inject, input, model, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ButtonModule } from '@openng/optimus-ui/button';
-import { DialogModule } from '@openng/optimus-ui/dialog';
 import { InputTextModule } from '@openng/optimus-ui/inputtext';
 import { MessageModule } from '@openng/optimus-ui/message';
-import { SelectModule } from '@openng/optimus-ui/select';
-import { TableModule } from '@openng/optimus-ui/table';
 import { TagModule } from '@openng/optimus-ui/tag';
 import { TooltipModule } from '@openng/optimus-ui/tooltip';
 import { Api } from '../core/api';
+import { FileHandleService, fsaErrorMessage } from '../core/file-handle';
 import { GooglePicker } from '../core/picker';
-import { DriveFile, DriveStatus, SourceKind, WorkbookDirItem } from '../core/models';
+import { DriveStatus, SourceKind } from '../core/models';
 
 @Component({
   selector: 'app-workbook-ref',
   imports: [
-    FormsModule, ButtonModule, DialogModule, InputTextModule, MessageModule,
-    SelectModule, TableModule, TagModule, TooltipModule,
+    FormsModule, ButtonModule, InputTextModule, MessageModule,
+    TagModule, TooltipModule,
   ],
   template: `
     <!-- ─── Card view (when a file is set) ─── -->
     @if (value() && !editing) {
       <div class="card" [class.card-ok]="testResult()" [class.card-err]="testError()">
         <div class="card-icon">
-          <i class="pi" [class.pi-file]="kindOf(value()) === 'local'"
-             [class.pi-link]="kindOf(value()) === 'sheet'"
-             [class.pi-google]="kindOf(value()) === 'drive'"></i>
+          <i class="pi" [class.pi-link]="kindOf(value()) === 'sheet'"
+             [class.pi-google]="kindOf(value()) === 'drive'"
+             [class.pi-folder-open]="kindOf(value()) === 'upload' || kindOf(value()) === 'local'"></i>
         </div>
         <div class="card-body">
           <div class="card-name">{{ fileName() }}</div>
@@ -39,6 +37,12 @@ import { DriveFile, DriveStatus, SourceKind, WorkbookDirItem } from '../core/mod
           @if (testError()) {
             <div class="card-meta card-meta-err">{{ testError() }}</div>
           }
+          @if (kindOf(value()) === 'upload' && handleKey() && !hasHandle()) {
+            <div class="card-meta card-meta-warn">
+              <i class="pi pi-exclamation-triangle"></i>
+              File handle expired — re-select to enable sync and fresh renders.
+            </div>
+          }
         </div>
         <div class="card-status">
           @if (testing()) {
@@ -47,11 +51,29 @@ import { DriveFile, DriveStatus, SourceKind, WorkbookDirItem } from '../core/mod
             <i class="pi pi-check-circle status-ok"></i>
           } @else if (testError()) {
             <i class="pi pi-times-circle status-err"></i>
+          } @else if (kindOf(value()) === 'upload' && handleKey() && !hasHandle()) {
+            <i class="pi pi-exclamation-triangle status-warn"></i>
           }
         </div>
         <div class="card-actions">
           <p-button icon="pi pi-refresh" size="small" [text]="true"
                     pTooltip="Re-test" (onClick)="testAccess()" />
+          @if (kindOf(value()) === 'drive' || kindOf(value()) === 'sheet') {
+            <p-button icon="pi pi-external-link" size="small" [text]="true"
+                      pTooltip="Open in Google Sheets" (onClick)="openInSheets()" />
+          }
+          @if (kindOf(value()) === 'upload' && hasHandle()) {
+            <p-button icon="pi pi-sync" size="small" [text]="true"
+                      [loading]="uploading()"
+                      pTooltip="Re-read from disk and upload latest version"
+                      (onClick)="reuploadFromHandle()" />
+          }
+          @if (kindOf(value()) === 'upload' && handleKey() && !hasHandle() && fh.isSupported()) {
+            <p-button icon="pi pi-folder-open" size="small" [text]="true"
+                      [loading]="uploading()" severity="warn"
+                      pTooltip="Re-select this file to restore sync"
+                      (onClick)="reselectForHandle()" />
+          }
           @if (kindOf(value()) === 'drive') {
             <p-button icon="pi pi-sign-out" size="small" [text]="true" severity="danger"
                       pTooltip="Disconnect Google Drive" (onClick)="disconnect()" />
@@ -65,10 +87,12 @@ import { DriveFile, DriveStatus, SourceKind, WorkbookDirItem } from '../core/mod
       <div class="edit-card">
         <div class="edit-header">
           <div class="mode-tabs">
-            <button class="tab" [class.active]="mode() === 'local'"
-                    (click)="setMode('local')">
-              <i class="pi pi-file"></i> File
-            </button>
+            @if (fh.isSupported()) {
+              <button class="tab" [class.active]="mode() === 'upload'"
+                      (click)="setMode('upload')">
+                <i class="pi pi-folder-open"></i> Browse
+              </button>
+            }
             <button class="tab" [class.active]="mode() === 'sheet'"
                     (click)="setMode('sheet')">
               <i class="pi pi-link"></i> Link
@@ -84,16 +108,26 @@ import { DriveFile, DriveStatus, SourceKind, WorkbookDirItem } from '../core/mod
         </div>
 
         <div class="edit-body">
-          @if (mode() === 'local') {
-            <div class="input-row">
-              <input pInputText [ngModel]="value()" (ngModelChange)="type($event)"
-                     [placeholder]="placeholder()" />
-              <p-button icon="pi pi-folder-open" size="small" [outlined]="true"
-                        pTooltip="Browse" (onClick)="openBrowser()" />
+          @if (mode() === 'upload') {
+            <div class="browse-section">
+              <p-button label="Choose file from your computer" icon="pi pi-folder-open"
+                        size="small" [loading]="uploading()"
+                        pTooltip="Opens your operating system's file picker"
+                        (onClick)="browseLocal()" />
+              @if (uploading()) {
+                <small class="hint">Uploading...</small>
+              }
+              @if (browseError()) {
+                <p-message severity="error" [text]="browseError()!" />
+              }
+              @if (browseName()) {
+                <div class="browse-picked">
+                  <i class="pi pi-file"></i>
+                  <span class="browse-picked-name">{{ browseName() }}</span>
+                  <i class="pi pi-check-circle status-ok"></i>
+                </div>
+              }
             </div>
-            <p-select appendTo="body" [options]="files()" [ngModel]="value()"
-                      (ngModelChange)="type($event ?? '')" [filter]="true" [showClear]="true"
-                      placeholder="…or pick from project" />
           }
 
           @if (mode() === 'sheet') {
@@ -130,50 +164,6 @@ import { DriveFile, DriveStatus, SourceKind, WorkbookDirItem } from '../core/mod
       </div>
     }
 
-    <!-- ─── Browse dialog ─── -->
-    <p-dialog header="Browse workbook directory" [(visible)]="browser" [modal]="true"
-              [style]="{ width: '44rem', maxWidth: '94vw' }">
-      <div class="picker">
-        @if (!wdirRoot()) {
-          <p-message severity="warn"
-            text="No workbook directory configured: set WORKBOOK_DIR in .env and restart." />
-        } @else {
-          <div class="picker-bar">
-            <small class="muted">{{ wdirRoot() }}</small>
-            @if (wdirFolder()) {
-              <small class="muted">/ {{ wdirFolder() }}</small>
-              <p-button label="Back" icon="pi pi-arrow-left" size="small" [text]="true"
-                        (onClick)="wdirUp()" />
-            }
-          </div>
-          <p-table [value]="wdirItems()" [loading]="wdirLoading()" size="small" dataKey="path">
-            <ng-template #header>
-              <tr><th>Name</th><th>Type</th><th>Size</th><th></th></tr>
-            </ng-template>
-            <ng-template #body let-f>
-              <tr>
-                <td>{{ f.name }}</td>
-                <td><p-tag [value]="f.kind" severity="secondary" /></td>
-                <td>{{ f.kind === 'file' && f.size ? (f.size / 1024).toFixed(0) + ' KB' : '—' }}</td>
-                <td>
-                  @if (f.kind === 'folder') {
-                    <p-button label="Open" size="small" [text]="true" (onClick)="wdirInto(f)" />
-                  } @else {
-                    <p-button label="Select" size="small" (onClick)="wdirChoose(f)" />
-                  }
-                </td>
-              </tr>
-            </ng-template>
-            <ng-template #emptymessage>
-              <tr><td colspan="4">No .xlsx files here.</td></tr>
-            </ng-template>
-          </p-table>
-        }
-        @if (wdirError()) { <p-message severity="error" [text]="wdirError()!" /> }
-      </div>
-    </p-dialog>
-
-
   `,
   styles: `
     :host { display: block; min-width: 0; }
@@ -193,9 +183,13 @@ import { DriveFile, DriveStatus, SourceKind, WorkbookDirItem } from '../core/mod
                  text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
     .card-meta { font-size: .7rem; color: var(--text-secondary); margin-top: .15rem; }
     .card-meta-err { color: var(--danger); }
+    .card-meta-warn { color: #d97706; font-size: .68rem; display: flex;
+                      gap: .25rem; align-items: center; }
+    .card-meta-warn .pi { font-size: .65rem; }
     .card-status { flex-shrink: 0; font-size: 1rem; }
     .status-ok { color: var(--success); }
     .status-err { color: var(--danger); }
+    .status-warn { color: #d97706; }
     .card-actions { display: flex; gap: 0; flex-shrink: 0; }
 
     /* ─── Edit (choosing a file) ─── */
@@ -213,31 +207,33 @@ import { DriveFile, DriveStatus, SourceKind, WorkbookDirItem } from '../core/mod
     .tab .pi { font-size: .7rem; }
     .edit-body { padding: .6rem .65rem; display: grid; gap: .4rem; }
     .edit-body input, .edit-body p-select { width: 100%; }
-    .input-row { display: flex; gap: .35rem; align-items: center; }
-    .input-row input { flex: 1; min-width: 0; font-size: .82rem; }
     .hint { font-size: .7rem; color: var(--text-secondary); }
-    .drive-connect { display: flex; gap: .5rem; align-items: center; }
+    .browse-section { display: grid; gap: .4rem; justify-items: center; }
+    .browse-picked { display: flex; gap: .4rem; align-items: center; padding: .35rem .5rem;
+                     border: 1px solid color-mix(in srgb, var(--success) 30%, var(--border));
+                     border-radius: var(--radius-sm); font-size: .82rem; }
+    .browse-picked-name { font-weight: 600; flex: 1; overflow: hidden;
+                          text-overflow: ellipsis; white-space: nowrap; }
+    .drive-connect { display: flex; flex-direction: column; gap: .5rem; align-items: center; }
     .drive-bar { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
-    .muted { color: var(--text-secondary); }
-
-    /* ─── Dialogs ─── */
-    .picker { display: grid; gap: .6rem; }
-    .picker-bar { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
-    .picker-bar input { flex: 1 1 14rem; }
     ::ng-deep :is(.p-message, .p-message-content, .p-message-text) {
       min-width: 0; max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
   `,
 })
 export class WorkbookRefField implements OnDestroy {
   private api = inject(Api);
+  fh = inject(FileHandleService);
   private gPicker = inject(GooglePicker);
 
   value = model<string>('');
-  files = input<string[]>([]);
-  placeholder = input('examples/01_simple/sales_source.xlsx');
   role = input<'source' | 'config'>('source');
+  /** Key for storing the FileSystemFileHandle, e.g. `projectId:source`. */
+  handleKey = input<string>('');
 
-  mode = signal<SourceKind>('local');
+  mode = signal<SourceKind>(this._defaultMode());
+  uploading = signal(false);
+  browseError = signal<string | null>(null);
+  browseName = signal('');
   drive = signal<DriveStatus | null>(null);
   chosenName = signal('');
   driveError = signal<string | null>(null);
@@ -249,13 +245,6 @@ export class WorkbookRefField implements OnDestroy {
   testResult = signal<{ name: string; sheets: string[]; size: number } | null>(null);
   testError = signal<string | null>(null);
 
-  wdirRoot = signal<string | null>(null);
-  wdirFolder = signal('');
-  wdirItems = signal<WorkbookDirItem[]>([]);
-  wdirLoading = signal(false);
-  wdirError = signal<string | null>(null);
-  browser = false;
-
   private own = '';
 
   /** Extracted filename for display. */
@@ -264,6 +253,10 @@ export class WorkbookRefField implements OnDestroy {
   private storageHandler = (e: StorageEvent) => {
     if (e.key === 'drive-connected') this.loadStatus();
   };
+
+  private _defaultMode(): SourceKind {
+    return (typeof (window as any).showOpenFilePicker === 'function') ? 'upload' : 'sheet';
+  }
 
   constructor() {
     // Pre-load Drive status so the Drive tab shows connected immediately
@@ -275,7 +268,8 @@ export class WorkbookRefField implements OnDestroy {
       const value = this.value();
       if (value === this.own) return;
       this.own = value;
-      this.mode.set(kindOf(value));
+      const k = kindOf(value);
+      this.mode.set(k === 'local' ? 'upload' : k);
       if (value.startsWith('drive:') && !this.chosenName()) this.nameOf(value);
     });
     // Extract filename + auto-test only when value actually changes
@@ -298,6 +292,15 @@ export class WorkbookRefField implements OnDestroy {
 
   private extractName(ref: string): string {
     if (!ref) return '';
+    if (ref.startsWith('upload:')) {
+      if (this.browseName()) return this.browseName();
+      const key = this.handleKey();
+      if (key && this.fh.getName(key)) return this.fh.getName(key);
+      // Parse ?name= from the ref itself
+      const nameParam = ref.match(/\?name=(.+)$/);
+      if (nameParam) return decodeURIComponent(nameParam[1]);
+      return ref.slice('upload:'.length).split('?')[0];
+    }
     if (ref.startsWith('drive:')) return this.chosenName() || ref;
     if (ref.includes('docs.google.com')) {
       const match = ref.match(/\/d\/([^/]+)/);
@@ -336,6 +339,98 @@ export class WorkbookRefField implements OnDestroy {
 
   kindOf = kindOf;
 
+  // ── browser file pick (File System Access API) ──
+
+  hasHandle(): boolean {
+    const key = this.handleKey();
+    return !!key && this.fh.has(key);
+  }
+
+  browseLocal() {
+    this.browseError.set(null);
+    this.browseName.set('');
+    this.fh.pick().subscribe({
+      next: (picked) => {
+        this.uploading.set(true);
+        const key = this.handleKey();
+        if (key) this.fh.store(key, picked.handle, picked.file.lastModified, picked.name);
+        this.api.uploadWorkbook(picked.file).subscribe({
+          next: (result) => {
+            this.uploading.set(false);
+            this.browseName.set(picked.name);
+            this.type(result.ref);
+            this.editing = false;
+          },
+          error: (e) => {
+            this.uploading.set(false);
+            this.browseError.set(fsaErrorMessage(e));
+          },
+        });
+      },
+      error: (e) => {
+        if (e instanceof DOMException && e.name === 'AbortError') return;
+        this.browseError.set(fsaErrorMessage(e));
+      },
+    });
+  }
+
+  /** Re-select a file to restore the handle (after page reload or creation from dialog). */
+  reselectForHandle() {
+    this.browseError.set(null);
+    this.fh.pick().subscribe({
+      next: (picked) => {
+        this.uploading.set(true);
+        const key = this.handleKey();
+        if (key) this.fh.store(key, picked.handle, picked.file.lastModified, picked.name);
+        this.api.uploadWorkbook(picked.file).subscribe({
+          next: (result) => {
+            this.uploading.set(false);
+            this.browseName.set(picked.name);
+            this.type(result.ref);
+          },
+          error: (e) => {
+            this.uploading.set(false);
+            this.browseError.set(fsaErrorMessage(e));
+          },
+        });
+      },
+      error: (e) => {
+        if (e instanceof DOMException && e.name === 'AbortError') return;
+        this.browseError.set(fsaErrorMessage(e));
+      },
+    });
+  }
+
+  /** Re-read the file from the stored handle and re-upload to get a fresh ref. */
+  reuploadFromHandle() {
+    const key = this.handleKey();
+    if (!key) return;
+    this.uploading.set(true);
+    this.browseError.set(null);
+    this.fh.reread(key).then((picked) => {
+      if (!picked) {
+        this.uploading.set(false);
+        this.browseError.set('No file handle stored — please browse again.');
+        return;
+      }
+      this.api.uploadWorkbook(picked.file).subscribe({
+        next: (result) => {
+          this.uploading.set(false);
+          this.fh.markSeen(key, picked.file.lastModified);
+          this.browseName.set(picked.name);
+          this.type(result.ref);
+        },
+        error: (e) => {
+          this.uploading.set(false);
+          this.browseError.set(fsaErrorMessage(e));
+        },
+      });
+    }).catch((e) => {
+      this.uploading.set(false);
+      this.browseError.set('Could not re-read the file. You may need to pick it again.');
+    });
+  }
+
   // ── test access ──
 
   testAccess() {
@@ -352,43 +447,6 @@ export class WorkbookRefField implements OnDestroy {
       },
       error: (e) => { this.testing.set(false); this.testError.set(e.message); },
     });
-  }
-
-  // ── workbook dir browser ──
-
-  openBrowser() {
-    this.browser = true;
-    this.wdirFolder.set('');
-    this.wdirError.set(null);
-    this.loadDir('');
-  }
-
-  private loadDir(folder: string) {
-    this.wdirLoading.set(true);
-    this.wdirError.set(null);
-    this.api.browseWorkbookDir(folder).subscribe({
-      next: (r) => {
-        this.wdirRoot.set(r.root);
-        this.wdirFolder.set(r.folder);
-        this.wdirItems.set(r.items);
-        this.wdirLoading.set(false);
-      },
-      error: (e) => { this.wdirLoading.set(false); this.wdirError.set(e.message); },
-    });
-  }
-
-  wdirInto(item: WorkbookDirItem) { this.loadDir(item.path); }
-
-  wdirUp() {
-    const parts = this.wdirFolder().split('/');
-    parts.pop();
-    this.loadDir(parts.join('/'));
-  }
-
-  wdirChoose(item: WorkbookDirItem) {
-    this.type(item.path);
-    this.browser = false;
-    this.editing = false;
   }
 
   // ── google drive ──
@@ -467,10 +525,22 @@ export class WorkbookRefField implements OnDestroy {
     });
   }
 
+  openInSheets() {
+    const ref = this.value();
+    let url = '';
+    if (ref.startsWith('drive:')) {
+      url = `https://docs.google.com/spreadsheets/d/${ref.slice('drive:'.length)}/edit`;
+    } else if (ref.includes('docs.google.com')) {
+      url = ref;
+    }
+    if (url) window.open(url, '_blank', 'noopener');
+  }
+
   refresh() { this.loadStatus(); }
 }
 
 export function kindOf(value: string): SourceKind {
+  if (value.startsWith('upload:')) return 'upload';
   if (value.startsWith('drive:')) return 'drive';
   return value.startsWith('http') && value.includes('docs.google.com') ? 'sheet' : 'local';
 }

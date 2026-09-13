@@ -24,139 +24,187 @@
     </p-message>
   }
 
-  <!-- ─── Toolbar ─────────────────────────────────────────────────── -->
-  <div class="toolbar">
+  <!-- ─── Top nav bar ─────────────────────────────────────────────── -->
+  <div class="topbar">
     <nav class="breadcrumb">
-      <a routerLink="/work" class="crumb">My work</a>
+      <a routerLink="/work" class="crumb">Projects</a>
       <i class="pi pi-chevron-right crumb-sep"></i>
-      <span class="crumb-current">{{ edit.name || 'Untitled' }}</span>
+      <span class="crumb">{{ edit.name || 'Untitled' }}</span>
+      <i class="pi pi-chevron-right crumb-sep"></i>
+      <span class="crumb-current">Configuration</span>
     </nav>
-    <input pInputText [(ngModel)]="edit.name" placeholder="Project name" class="name-input" />
     <span class="grow"></span>
-    <span class="toolbar-status">
-      @if (busy()) {
-        <i class="pi pi-spin pi-spinner"></i>
-        <span class="muted">Fetching and rendering...</span>
-      } @else if (render()) {
-        <span class="muted">{{ render()!.tables.length }} table(s) · {{ totalRows() }} rows</span>
-      }
+    <div class="topbar-search" (click)="helpDialog = true">
+      <i class="pi pi-search topbar-search-icon"></i>
+      <span class="topbar-search-text">Search projects, files, tables...</span>
+      <span class="topbar-shortcut">
+        <kbd>{{ isMac ? '⌘' : 'Ctrl' }}</kbd>
+        <kbd>K</kbd>
+      </span>
+    </div>
+    <p-button icon="pi pi-bell" size="small" [text]="true"
+              pTooltip="Notifications" tooltipPosition="bottom" />
+  </div>
 
-      @if (pollError()) {
-        <span class="poll-indicator poll-error" pTooltip="Sync failed: check your connection or Drive access">
-          <span class="poll-dot poll-dot-err"></span>
-          <span class="poll-label poll-label-err">Sync failed</span>
-        </span>
-      } @else if (stale() && !busy()) {
-        <span class="poll-indicator poll-stale" pTooltip="Source workbook changed: click Render to update">
-          <span class="poll-dot poll-dot-stale"></span>
-          <span class="poll-label poll-label-stale">Changed: re-render</span>
-        </span>
-      } @else if (status() && !busy()) {
-        <span class="poll-indicator" [pTooltip]="'Polling every ' + settings.pollInterval() + 's for workbook changes'">
-          <span class="poll-dot poll-dot-ok"></span>
-          <span class="poll-label">Synced {{ status()!.checked_at | date: 'mediumTime' }}</span>
-        </span>
-      }
-    </span>
-    <div class="btn-group">
+  <!-- ─── Project header ──────────────────────────────────────────── -->
+  <div class="proj-header">
+    <div class="proj-header-left">
+      <div class="proj-title-row">
+        <input pInputText [(ngModel)]="edit.name" placeholder="Project name" class="proj-name-input" />
+        @if (pollError()) {
+          <span class="poll-indicator" [pTooltip]="pollError()!">
+            <span class="poll-dot poll-dot-err"></span>
+            <span class="poll-label poll-label-err">{{ pollError() }}</span>
+          </span>
+        } @else if (stale() && !busy()) {
+          <span class="poll-indicator" pTooltip="Source workbook changed: click Render to update">
+            <span class="poll-dot poll-dot-stale"></span>
+            <span class="poll-label poll-label-stale">Changed — re-render</span>
+          </span>
+        } @else if (status() && !busy()) {
+          <span class="poll-indicator" [pTooltip]="'Polling every ' + settings.pollInterval() + 's for workbook changes'">
+            <span class="poll-dot poll-dot-ok"></span>
+            <span class="poll-label">Synced {{ status()!.checked_at | date: 'mediumTime' }}</span>
+          </span>
+        }
+      </div>
+      <p class="proj-subtitle">Configure file mappings, preview data and push to database.</p>
+    </div>
+    <div class="proj-header-right">
+      <span class="proj-stats">
+        @if (busy()) {
+          <i class="pi pi-spin pi-spinner"></i>
+          <span>Rendering...</span>
+        } @else if (render()) {
+          <span>{{ render()!.tables.length }} table(s) · {{ totalRows() }} rows</span>
+        }
+        @if (render()?.rendered_at) {
+          <span>Last rendered {{ render()!.rendered_at | date: 'short' }}</span>
+        }
+      </span>
       <p-button label="Save" size="small" [outlined]="true"
                 pTooltip="Save project settings" tooltipPosition="bottom"
                 (onClick)="save()" />
       <p-button label="DDL" size="small" [outlined]="true"
                 pTooltip="View generated CREATE TABLE statements" tooltipPosition="bottom"
                 (onClick)="showDdl()" />
+      <p-button label="Render" size="small" severity="success" [loading]="busy()"
+                pTooltip="Save and render the schema from current workbooks" tooltipPosition="bottom"
+                (onClick)="doRender()" />
+      <p-button label="Push" size="small"
+                [disabled]="!canPush()"
+                pTooltip="Push schema and data to the database" tooltipPosition="bottom"
+                (onClick)="openPush()" />
+      <p-button icon="pi pi-ellipsis-v" size="small" [text]="true"
+                pTooltip="More options ({{ isMac ? '⌘' : 'Ctrl' }}+/ for shortcuts)"
+                tooltipPosition="bottom"
+                (onClick)="helpDialog = true" />
     </div>
-    <p-button label="Render" size="small" [loading]="busy()"
-              pTooltip="Save and render the schema from current workbooks" tooltipPosition="bottom"
-              (onClick)="doRender()" />
-    <p-button label="Push" size="small" severity="success"
-              [disabled]="!canPush()"
-              pTooltip="Push schema and data to the database" tooltipPosition="bottom"
-              (onClick)="openPush()" />
-    <p-button icon="pi pi-question-circle" size="small" [text]="true"
-              pTooltip="Keyboard shortcuts ({{ isMac ? '⌘' : 'Ctrl' }}+/)" tooltipPosition="bottom"
-              (onClick)="helpDialog = true" />
   </div>
 
-  <!-- ─── Configuration (collapsible) ────────────────────────────── -->
-  <p-panel header="Configuration" [toggleable]="true" [(collapsed)]="configOpen"
-           [toggler]="'header'">
-    <div class="config-cards">
-      <div class="config-row">
-        <label class="config-label">Configuration</label>
-        <app-workbook-ref [(value)]="edit.config_ref" [files]="files()" role="config" />
-      </div>
-
-      <div class="config-row">
-        <label class="config-label">Source</label>
-        <app-workbook-ref [(value)]="edit.source_ref" [files]="files()" />
-      </div>
-
-      @if (isCsvSource() && !edit.config_ref) {
-        <div class="auto-config-hint">
-          <i class="pi pi-info-circle"></i>
-          <span>CSV source detected.</span>
-          <p-button label="Auto-generate config" size="small" [outlined]="true"
-                    icon="pi pi-bolt" [loading]="generatingConfig()"
-                    pTooltip="Generate a configuration workbook from the CSV headers"
-                    (onClick)="autoGenerateConfig()" />
-        </div>
-      }
-
-      <div class="config-footer">
-        <div class="config-option">
-          <span class="config-label">Keys</span>
-          <p-select appendTo="body" [options]="idTypes" optionLabel="label" optionValue="value"
-                    [(ngModel)]="idType" (ngModelChange)="changeIdType()" />
-        </div>
-        <div class="config-option">
-          <span class="config-label">Auto-render</span>
-          <p-toggleswitch [(ngModel)]="autoRender" (ngModelChange)="save()" />
-        </div>
-        <span class="status">
-          @if (render()?.rendered_at) {
-            Rendered {{ render()!.rendered_at | date: 'short' }}
-          } @else {
-            Not rendered yet
-          }
-          @if (status()) {
-            · polled {{ status()!.checked_at | date: 'mediumTime' }}
-            @if (stale()) {
-              · <span class="status-stale">changed</span>
-            }
-          }
-        </span>
+  <!-- ─── Configuration files ─────────────────────────────────────── -->
+  <div class="section-card config-section">
+    <div class="config-section-header">
+      <div class="section-title">Configuration files</div>
+      <div class="config-hint">
+        <i class="pi pi-info-circle"></i>
+        Upload Excel files to configure and map your data sources.
       </div>
     </div>
-  </p-panel>
+
+    <div class="config-file-rows">
+      <div class="config-file-row">
+        <div class="config-file-label">
+          <i class="pi pi-file-edit config-file-icon"></i>
+          <div>
+            <div class="config-file-title">Configuration workbook</div>
+            <div class="config-file-desc">Defines tables, columns, mappings and parsing rules.</div>
+          </div>
+        </div>
+        <app-workbook-ref class="config-file-detail" [(value)]="edit.config_ref"
+                          role="config" [handleKey]="id + ':config'" />
+      </div>
+
+      <div class="config-file-row">
+        <div class="config-file-label">
+          <i class="pi pi-file config-file-icon"></i>
+          <div>
+            <div class="config-file-title">Source workbook</div>
+            <div class="config-file-desc">Source data to be parsed and loaded.</div>
+          </div>
+        </div>
+        <app-workbook-ref class="config-file-detail" [(value)]="edit.source_ref"
+                          [handleKey]="id + ':source'" />
+      </div>
+    </div>
+
+    @if (hasBrowserFiles()) {
+      <div class="browser-file-hint">
+        <i class="pi pi-info-circle"></i>
+        <span>Files selected from your computer are synced via your browser.
+          If you refresh the page or the connection is lost, you will be prompted
+          to re-select the file(s) on your next render.</span>
+      </div>
+    }
+
+    @if (isCsvSource() && !edit.config_ref) {
+      <div class="auto-config-hint">
+        <i class="pi pi-info-circle"></i>
+        <span>CSV source detected.</span>
+        <p-button label="Auto-generate config" size="small" [outlined]="true"
+                  icon="pi pi-bolt" [loading]="generatingConfig()"
+                  pTooltip="Generate a configuration workbook from the CSV headers"
+                  (onClick)="autoGenerateConfig()" />
+      </div>
+    }
+
+    <div class="config-footer">
+      <div class="config-option">
+        <span class="config-label">Keys</span>
+        <p-select appendTo="body" [options]="idTypes" optionLabel="label" optionValue="value"
+                  [(ngModel)]="idType" (ngModelChange)="changeIdType()" />
+        <span class="config-option-desc">Use key columns defined in the configuration workbook.</span>
+      </div>
+      <div class="config-option">
+        <span class="config-label">Auto-render</span>
+        <p-toggleswitch [(ngModel)]="autoRender" (ngModelChange)="save()" />
+        <span class="config-option-desc">Automatically render diagram after file changes.</span>
+      </div>
+    </div>
+  </div>
 
   <!-- ─── Schema & Preview ───────────────────────────────────────── -->
   @if (render()) {
-    <div class="section-bar">
+    <!-- Bottom bar with tabs and controls -->
+    <div class="bottom-bar">
       <div class="btn-group">
         <p-button label="ER diagram" size="small"
-                  pTooltip="Interactive schema diagram with relationships" tooltipPosition="bottom"
+                  pTooltip="Interactive schema diagram with relationships" tooltipPosition="top"
                   [outlined]="view() !== 'er'" (onClick)="view.set('er')" />
         <p-button label="Blocks" size="small"
-                  pTooltip="List of configured blocks with preview" tooltipPosition="bottom"
+                  pTooltip="List of configured blocks with preview" tooltipPosition="top"
                   [outlined]="view() !== 'blocks'" (onClick)="view.set('blocks')" />
       </div>
-      <span class="section-meta clickable" (click)="scrollToValidation()">
+      <span class="grow"></span>
+      <span class="bottom-meta clickable" (click)="scrollToValidation()">
         @if (errors().length) {
+          <i class="pi pi-times-circle bottom-icon-err"></i>
           <span class="err-count">{{ errors().length }} error(s)</span>
         } @else {
+          <i class="pi pi-check-circle bottom-icon-ok"></i>
           <span class="ok-count">0 errors</span>
         }
-        <span class="muted">,</span>
+      </span>
+      <span class="bottom-meta clickable" (click)="scrollToValidation()">
         @if (warnings().length) {
+          <i class="pi pi-exclamation-triangle bottom-icon-warn"></i>
           <span class="warn-count">{{ warnings().length }} warning(s)</span>
         } @else {
           <span class="muted">0 warnings</span>
         }
       </span>
       @if (badCells().length || skippedRows().length) {
-        <span class="section-meta clickable" (click)="scrollToDataQuality()">
-          <span class="muted">·</span>
+        <span class="bottom-meta clickable" (click)="scrollToDataQuality()">
           @if (badCells().length) {
             <span class="warn-count">{{ badCells().length }} type issue(s)</span>
           }

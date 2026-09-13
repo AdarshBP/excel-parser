@@ -15,6 +15,30 @@ import state
 
 PREVIEW_LIMIT = 20
 MAX_PREVIEW_LIMIT = 200
+
+
+def _display_name(path: Path, ref: str) -> str:
+    """The user-facing name: original filename for upload refs, path.name otherwise."""
+    if sources.looks_like_upload(ref):
+        return sources.upload_original_name(ref)
+    return path.name
+
+
+def _csv_source_name(path: Path, ref: str) -> str | None:
+    """Original filename stem for uploaded CSV files, so the CSV adapter uses
+    the right sheet name instead of the content-addressed hash.
+
+    Returns None for non-CSV or non-upload refs (the adapter falls back to
+    path.stem, which is already correct in those cases).
+    """
+    if path.suffix.lower() != ".csv":
+        return None
+    if not sources.looks_like_upload(ref):
+        return None
+    original = sources.upload_original_name(ref)
+    return Path(original).stem
+
+
 DATA_DIR = state.APP_DIR / "data"
 
 
@@ -71,11 +95,13 @@ def target_of(config: Path, overrides: dict = None) -> dict:
             "credentials": "from the server environment/.env"}
 
 
-def issues_of(config: Path, source: Path, overrides: dict = None) -> list:
+def issues_of(config: Path, source: Path, overrides: dict = None,
+              source_name: str = None) -> list:
     overrides = overrides or {}
     found = guard("validation", engine.validator.validate, config, source,
                   overrides.get("prefix"), overrides.get("target"),
-                  overrides.get("database"), overrides.get("id_type"))
+                  overrides.get("database"), overrides.get("id_type"),
+                  source_name=source_name)
     return [{"severity": i.severity, "where": i.where, "message": i.message} for i in found]
 
 
@@ -83,21 +109,25 @@ def render(project, limit: int = PREVIEW_LIMIT) -> dict:
     """Model + issues + previews for the current content of both workbooks."""
     config, source = resolve_pair(project)
     overrides = state.loads(project["target_json"], {}) or {}
-    issues = issues_of(config, source, overrides)
+    sname = _csv_source_name(source, project.get("source_ref", ""))
+    issues = issues_of(config, source, overrides, source_name=sname)
     errors = [i for i in issues if i["severity"] == "error"]
     prefix, id_type = overrides.get("prefix"), overrides.get("id_type")
     tables = guard("configuration", engine.preview.model, config, prefix, id_type)
     control = guard("configuration", engine.preview.control, config, prefix, id_type)
     previews = {} if errors else guard("preview", engine.preview.previews, config,
-                                       source, min(limit, MAX_PREVIEW_LIMIT))
+                                       source, min(limit, MAX_PREVIEW_LIMIT),
+                                       source_name=sname)
     return {
         "tables": tables,
         "control_tables": control,
         "issues": issues,
         "previews": previews,
         "target": target_of(config, overrides),
-        "source": {"name": source.name, "ref": project["source_ref"]},
-        "config": {"name": config.name, "ref": project["config_ref"]},
+        "source": {"name": _display_name(source, project["source_ref"]),
+                   "ref": project["source_ref"]},
+        "config": {"name": _display_name(config, project["config_ref"]),
+                   "ref": project["config_ref"]},
         "can_push": not errors,
         "rendered_at": state.now(),
         "preview_limit": min(limit, MAX_PREVIEW_LIMIT),
@@ -163,8 +193,9 @@ def push(project) -> dict:
     config, source = resolve_pair(project)
     overrides = state.loads(project["target_json"], {}) or {}
     where = target_of(config, overrides)
+    sname = _csv_source_name(source, project.get("source_ref", ""))
 
-    issues = issues_of(config, source, overrides)
+    issues = issues_of(config, source, overrides, source_name=sname)
     errors = [i for i in issues if i["severity"] == "error"]
     if errors:
         raise HTTPException(status_code=400, detail={
@@ -181,13 +212,14 @@ def push(project) -> dict:
                    database, overrides.get("prefix"), schema_sql, 0, lines.append,
                    overrides.get("id_type"), strict=True,
                    source_ref=source_ref, config_ref=config_ref,
-                   skip_audit=skip_audit)
+                   skip_audit=skip_audit, source_name=sname)
     return {
         "file_id": result.file_id, "row_total": result.total,
         "rows_per_table": result.per_table, "skipped_rows": result.skipped_rows,
         "bad_cells": result.bad_cells, "target_label": result.target,
         "target": where, "issues": issues, "log": lines,
-        "source_name": source.name, "config_name": config.name,
+        "source_name": _display_name(source, project.get("source_ref", "")),
+        "config_name": _display_name(config, project.get("config_ref", "")),
     }
 
 

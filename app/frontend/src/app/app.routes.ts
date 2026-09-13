@@ -29,6 +29,11 @@ export const routes: Routes = [
     loadComponent: () => import('./pages/settings').then((m) => m.SettingsPage),
   },
   {
+    path: 'data-viewer',
+    canActivate: [authGuard],
+    loadComponent: () => import('./pages/data-viewer').then((m) => m.DataViewerPage),
+  },
+  {
     path: 'history',
     canActivate: [authGuard],
     loadComponent: () => import('./pages/history').then((m) => m.HistoryPage),
