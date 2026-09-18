@@ -113,7 +113,7 @@ python3 -m pyflakes tools app/backend
 Expected row counts (verified by `test-examples.sh`): 01 = 3, 02 = 12,
 03 = 4 (UUID), 04 = 4, 05 = 4, 06 = 9 (3+6), 12 = 31, 13 = 33,
 14 = 470 (CSV), 15 = 1141, 16 = 3, 17 = 18 (5+8+5).
-09 (Swiggy) = 217, 11 (GrowthFalcons) = 109 — client files, skipped if absent.
+09 (Swiggy) = 222, 11 (GrowthFalcons) = 109 — client files, skipped if absent.
 Examples 07 and 08 must fail validation and exit 1 with nothing written.
 
 ## Application features

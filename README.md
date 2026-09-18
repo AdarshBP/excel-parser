@@ -372,7 +372,7 @@ examples/
   06_references/       Foreign-key references (orders + items)
   07_validation_errors/ Deliberately broken config (must fail)
   08_source_mismatch/  Right config, wrong source (must fail)
-  09_swiggy_annexure/  Real client: 13 tables, 217 rows
+  09_swiggy_annexure/  Real client: 14 tables, 222 rows
   10–15               More real-world client files
   16_source_ref_showcase/ All source_ref types demonstrated
   17_kitchen_sink/     Every feature in one file (regression test)
@@ -411,7 +411,7 @@ docker-compose.build.yml  Dev override: build locally
 | 06 | Foreign-key references | 2 | 9 |
 | 07 | Validation errors (must fail) | — | — |
 | 08 | Source mismatch (must fail) | — | — |
-| 09 | Real Swiggy annexure | 13 | 217 |
+| 09 | Real Swiggy annexure | 14 | 222 |
 | 12 | Petpooja daily growth | 1 | 31 |
 | 13 | SmartQ payment report | 3 | 33 |
 | 14 | Zomato business (CSV) | 1 | 470 |

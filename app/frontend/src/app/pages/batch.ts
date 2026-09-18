@@ -451,11 +451,19 @@ import { WorkbookRefField } from './workbook-ref';
           }
         </div>
         <div class="bottom-actions">
-          <p-button label="Validate all" icon="pi pi-check"
+          <p-button [label]="validateLabel()" icon="pi pi-check"
                     [outlined]="true" [loading]="validating()"
                     [disabled]="!configRef || !hasFiles()"
                     pTooltip="Check all files against the configuration" tooltipPosition="top"
                     (onClick)="validate()" />
+          @if (validationCache.size > 0) {
+            <p-button label="Hard refresh & validate" icon="pi pi-refresh"
+                      [outlined]="true" severity="warn" [loading]="validating()"
+                      [disabled]="!configRef || !hasFiles()"
+                      pTooltip="Clear cache and re-validate every file from scratch"
+                      tooltipPosition="top"
+                      (onClick)="hardValidate()" />
+          }
           <p-button label="Push all to database" icon="pi pi-play" severity="danger"
                     [loading]="pushing()" [disabled]="!canPush()"
                     pTooltip="Push all valid files to the database" tooltipPosition="top"
@@ -703,6 +711,11 @@ export class BatchPage {
   pushResult = signal<BatchPushResult | null>(null);
   error = signal<string | null>(null);
 
+  /** Validation cache: file fingerprint → result for files that passed. */
+  validationCache = new Map<string, BatchFileResult>();
+  /** Config ref that was used for the cached results. */
+  private cachedConfigRef = '';
+
   // Drive state
   driveStatus = signal<{ configured: boolean; connected: boolean; email: string | null } | null>(null);
   driveConnecting = signal(false);
@@ -725,6 +738,30 @@ export class BatchPage {
     if (!v) return 0;
     return v.results.reduce((sum, r) => sum + (r.rows || 0), 0);
   });
+
+  /** Number of files that still need validation (no cached valid result). */
+  pendingCount = computed(() => {
+    if (this.cachedConfigRef !== this.configRef) return this.totalFiles();
+    const files = this.uploadedFiles();
+    return files.filter(f => {
+      const cached = this.validationCache.get(this._fp(f));
+      return !cached || cached.status !== 'valid';
+    }).length;
+  });
+
+  /** Fingerprint a File by name + size + lastModified (cheap, no hashing). */
+  private _fp(f: File): string {
+    return `${f.name}:${f.size}:${f.lastModified}`;
+  }
+
+  /** Label for the validate button — shows pending count when some are cached. */
+  validateLabel(): string {
+    const pending = this.pendingCount();
+    const total = this.totalFiles();
+    if (pending === 0 && total > 0) return 'Re-validate all';
+    if (pending < total && pending > 0) return `Validate ${pending} new`;
+    return 'Validate all';
+  }
 
   filteredFiles = computed(() => {
     const q = this.fileSearch.toLowerCase().trim();
@@ -752,6 +789,8 @@ export class BatchPage {
     this.configError.set(null);
     this.validateResult.set(null);
     this.pushResult.set(null);
+    this.validationCache.clear();
+    this.cachedConfigRef = '';
   }
 
   downloadTemplate() {
@@ -842,38 +881,111 @@ export class BatchPage {
       return;
     }
     this.uploadedFiles.set(combined);
-    this.validateResult.set(null);
+    // Don't wipe validated results — new files show as "Pending" and
+    // will be validated on the next "Validate" click.
+    this._rebuildValidateResult();
     this.pushResult.set(null);
     this.error.set(null);
   }
 
   removeUpload(index: number) {
     if (index < 0) return;
+    const removed = this.uploadedFiles()[index];
+    if (removed) this.validationCache.delete(this._fp(removed));
     this.uploadedFiles.set(this.uploadedFiles().filter((_, i) => i !== index));
-    this.validateResult.set(null);
+    this._rebuildValidateResult();
     this.pushResult.set(null);
+  }
+
+  /** Rebuild validateResult from the cache for current files. */
+  private _rebuildValidateResult() {
+    const files = this.uploadedFiles();
+    if (!files.length) { this.validateResult.set(null); return; }
+    // Only rebuild if we've validated before with this config
+    if (this.cachedConfigRef !== this.configRef || this.validationCache.size === 0) {
+      this.validateResult.set(null);
+      return;
+    }
+    const results: BatchFileResult[] = [];
+    for (const f of files) {
+      const cached = this.validationCache.get(this._fp(f));
+      if (cached) results.push(cached);
+    }
+    if (results.length === 0) { this.validateResult.set(null); return; }
+    const valid = results.filter(x => x.status === 'valid').length;
+    const errors = results.filter(x => x.status === 'error').length;
+    this.validateResult.set({
+      results,
+      all_valid: errors === 0 && results.length === files.length,
+      total: files.length,
+      valid,
+      errors,
+    });
   }
 
   // ── validate ──
 
   validate() {
     this.validating.set(true);
-    this.validateResult.set(null);
     this.pushResult.set(null);
     this.error.set(null);
     this.showValidationDetails = false;
 
+    // Invalidate cache when config changes
+    if (this.cachedConfigRef !== this.configRef) {
+      this.validationCache.clear();
+      this.cachedConfigRef = this.configRef;
+    }
+
     if (this.uploadedFiles().length) {
-      const results: BatchFileResult[] = [];
       const files = [...this.uploadedFiles()];
       const seen: Record<string, string> = {};
 
-      const next = (i: number) => {
-        if (i >= files.length) {
+      // Seed seen-SHA map from cached results to catch cross-file duplicates
+      const results: BatchFileResult[] = [];
+      const toValidate: { index: number; file: File }[] = [];
+
+      for (let i = 0; i < files.length; i++) {
+        const fp = this._fp(files[i]);
+        const cached = this.validationCache.get(fp);
+        if (cached && cached.status === 'valid') {
+          // Re-use cached result — still need duplicate check against batch
+          if (cached.sha256 && seen[cached.sha256]) {
+            results.push({ ...cached, status: 'error',
+              message: `Duplicate content — identical to ${seen[cached.sha256]}` });
+          } else {
+            if (cached.sha256) seen[cached.sha256] = cached.name;
+            results.push(cached);
+          }
+        } else {
+          // Needs validation — placeholder until backend responds
+          results.push(null as any);
+          toValidate.push({ index: i, file: files[i] });
+        }
+      }
+
+      // If nothing to validate, we're done immediately
+      if (toValidate.length === 0) {
+        const valid = results.filter(x => x.status === 'valid').length;
+        const errors = results.filter(x => x.status === 'error').length;
+        this.validateResult.set({
+          results: [...results],
+          all_valid: errors === 0,
+          total: files.length, valid, errors,
+        });
+        this.validating.set(false);
+        return;
+      }
+
+      // Update intermediate result with cached entries filled in
+      this._emitValidateResult(results, files.length);
+
+      const next = (qi: number) => {
+        if (qi >= toValidate.length) {
           this.validating.set(false);
           return;
         }
-        const file = files[i];
+        const { index, file } = toValidate[qi];
         this.api.batchValidateOne(this.configRef, file).subscribe({
           next: (r) => {
             if (r.status === 'valid' && r.sha256 && seen[r.sha256]) {
@@ -882,43 +994,52 @@ export class BatchPage {
             } else if (r.sha256) {
               seen[r.sha256] = r.name;
             }
-            results.push(r);
-            const valid = results.filter(x => x.status === 'valid').length;
-            const errors = results.filter(x => x.status === 'error').length;
-            this.validateResult.set({
-              results: [...results],
-              all_valid: errors === 0,
-              total: files.length,
-              valid,
-              errors,
-            });
-            next(i + 1);
+            results[index] = r;
+            // Cache valid results for future re-validation
+            if (r.status === 'valid') {
+              this.validationCache.set(this._fp(file), r);
+            }
+            this._emitValidateResult(results, files.length);
+            next(qi + 1);
           },
           error: (e) => {
-            results.push({
+            results[index] = {
               ref: file.name, name: file.name, status: 'error',
               message: e.message, rows: 0,
-            });
-            const valid = results.filter(x => x.status === 'valid').length;
-            const errors = results.filter(x => x.status === 'error').length;
-            this.validateResult.set({
-              results: [...results],
-              all_valid: false,
-              total: files.length,
-              valid,
-              errors,
-            });
-            next(i + 1);
+            };
+            this._emitValidateResult(results, files.length);
+            next(qi + 1);
           },
         });
       };
       next(0);
     } else {
+      this.validationCache.clear();
       this.api.batchValidate(this.configRef, this.sourceRefs).subscribe({
         next: (r) => { this.validating.set(false); this.validateResult.set(r); },
         error: (e) => { this.validating.set(false); this.error.set(e.message); },
       });
     }
+  }
+
+  /** Emit a validateResult from the results array, filtering out null placeholders. */
+  private _emitValidateResult(results: (BatchFileResult | null)[], total: number) {
+    const filled = results.filter((r): r is BatchFileResult => r !== null);
+    const valid = filled.filter(x => x.status === 'valid').length;
+    const errors = filled.filter(x => x.status === 'error').length;
+    this.validateResult.set({
+      results: [...filled],
+      all_valid: errors === 0 && filled.length === total,
+      total,
+      valid,
+      errors,
+    });
+  }
+
+  /** Clear all cached results and re-validate every file from scratch. */
+  hardValidate() {
+    this.validationCache.clear();
+    this.validate();
   }
 
   // ── push ──

@@ -38,7 +38,7 @@ Requires PG credentials in `.env` (or environment variables).
 | 06_references | 9 rows (3 orders + 6 items, FK) |
 | 07_validation_errors | must fail validation |
 | 08_source_mismatch | must fail validation |
-| 09_swiggy_annexure | 217 rows (client file, skipped if absent) |
+| 09_swiggy_annexure | 222 rows (client file, skipped if absent) |
 | 10_zomato_settlement | (client file, skipped if absent) |
 | 11_growthfalcons | 109 rows (client file, skipped if absent) |
 | 12_petpooja_growth | 31 rows |

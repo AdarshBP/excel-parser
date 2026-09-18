@@ -40,7 +40,7 @@ Run from the project root.
    `examples/01_simple/sales_source.xlsx` and `examples/01_simple/sales_config.xlsx`
    → Render (expect one table, 3 rows) → View DDL → Push (expect 3 rows inserted,
    no password shown anywhere). The Swiggy example
-   (`examples/09_swiggy_annexure/`) renders 13 blocks / 217 rows with
+   (`examples/09_swiggy_annexure/`) renders 14 blocks / 222 rows with
    `order_level` 122.
 
 Notes:

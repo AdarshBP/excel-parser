@@ -48,12 +48,12 @@ import { WorkbookRefField } from './workbook-ref';
       <div class="search-bar">
         <div class="search-wrap">
           <i class="pi pi-search search-icon"></i>
-          <input pInputText [(ngModel)]="searchText" placeholder="Search configurations..."
-                 class="search-field" />
+          <input pInputText [ngModel]="searchText()" (ngModelChange)="searchText.set($event)"
+                 placeholder="Search configurations..." class="search-field" />
         </div>
         <p-select appendTo="body" [options]="sourceFilterOptions" optionLabel="label" optionValue="value"
-                  [(ngModel)]="sourceFilter" placeholder="All sources"
-                  [style]="{ minWidth: '9rem' }" />
+                  [ngModel]="sourceFilter()" (ngModelChange)="sourceFilter.set($event)"
+                  placeholder="All sources" [style]="{ minWidth: '9rem' }" />
       </div>
 
       <div class="table-wrap">
@@ -90,13 +90,23 @@ import { WorkbookRefField } from './workbook-ref';
           <ng-template #emptymessage>
             <tr>
               <td colspan="6">
-                <div class="empty-state">
-                  <div class="empty-state-icon"><i class="pi pi-list"></i></div>
-                  <p class="empty-state-title">No configurations yet</p>
-                  <p class="empty-state-desc">Create your first configuration to get started with your data mapping.</p>
-                  <p-button label="New configuration" icon="pi pi-plus" size="small"
-                            (onClick)="openNew()" />
-                </div>
+                @if (hasActiveFilter()) {
+                  <div class="empty-state">
+                    <div class="empty-state-icon"><i class="pi pi-search"></i></div>
+                    <p class="empty-state-title">No results found</p>
+                    <p class="empty-state-desc">No configurations match your search or filter. Try a different query.</p>
+                    <p-button label="Clear filters" icon="pi pi-filter-slash" size="small"
+                              [outlined]="true" (onClick)="clearFilters()" />
+                  </div>
+                } @else {
+                  <div class="empty-state">
+                    <div class="empty-state-icon"><i class="pi pi-list"></i></div>
+                    <p class="empty-state-title">No configurations yet</p>
+                    <p class="empty-state-desc">Create your first configuration to get started with your data mapping.</p>
+                    <p-button label="New configuration" icon="pi pi-plus" size="small"
+                              (onClick)="openNew()" />
+                  </div>
+                }
               </td>
             </tr>
           </ng-template>
@@ -185,8 +195,8 @@ export class Work {
   submitted = false;
   draft = { name: '', source_ref: '', config_ref: '' };
 
-  searchText = '';
-  sourceFilter = '';
+  searchText = signal('');
+  sourceFilter = signal('');
   sourceFilterOptions = [
     { label: 'All sources', value: '' },
     { label: 'Link', value: 'sheet' },
@@ -196,11 +206,12 @@ export class Work {
 
   filteredProjects = computed(() => {
     let list = this.projects();
-    if (this.sourceFilter) {
-      list = list.filter(p => p.source_kind === this.sourceFilter);
+    const filter = this.sourceFilter();
+    if (filter) {
+      list = list.filter(p => p.source_kind === filter);
     }
-    if (this.searchText.trim()) {
-      const q = this.searchText.toLowerCase();
+    const q = this.searchText().trim().toLowerCase();
+    if (q) {
       list = list.filter(p => p.name.toLowerCase().includes(q) ||
         p.source_ref.toLowerCase().includes(q) ||
         p.config_ref.toLowerCase().includes(q));
@@ -208,8 +219,15 @@ export class Work {
     return list;
   });
 
+  hasActiveFilter = computed(() => this.searchText().trim() !== '' || this.sourceFilter() !== '');
+
   constructor() {
     this.load();
+  }
+
+  clearFilters() {
+    this.searchText.set('');
+    this.sourceFilter.set('');
   }
 
   kindLabel(kind: Project['source_kind']) {

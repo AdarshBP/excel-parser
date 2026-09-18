@@ -15,7 +15,7 @@ generated examples (03-05, 07-08, 16-17) with `python3 tools/make_examples.py`.
 | 6 | `06_references` | cross-table `references` in `column_config`: orders and items linked by `order_id` |
 | 7 | `07_validation_errors` | a wrong configuration, and exactly what the validator says about it |
 | 8 | `08_source_mismatch` | a right configuration pointed at a workbook that no longer matches it |
-| 9 | `09_swiggy_annexure` | a real Swiggy invoice annexure - 13 tables, 217 rows, reconciled against the file itself |
+| 9 | `09_swiggy_annexure` | a real Swiggy invoice annexure - 14 tables, 222 rows, reconciled against the file itself |
 | 10 | `10_zomato_settlement` | a real Zomato settlement report |
 | 11 | `11_growthfalcons` | a real GrowthFalcons settlement report - 5 tables, 109 rows |
 | 16 | `16_source_ref_showcase` | all four `source_ref` types in one table: `col:`, `const:`, `fn:`, `expr:` |
@@ -805,7 +805,7 @@ last line and in the placeholders inside the `INSERT` (`%s` instead of `?`):
 ```
 read 6 setting(s) from .env: PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD
 ...
-file_id 1: 217 rows into postgres excel_parser (schema swiggy)
+file_id 1: 222 rows into postgres excel_parser (schema swiggy)
 ```
 
 This file also carries one genuinely dirty cell - `75.4` under
